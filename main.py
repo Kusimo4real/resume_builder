@@ -1,11 +1,11 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from typing import Optional
 from fastapi.responses import JSONResponse
-from utils import extract_text_from_pdf, extract_text_from_docx, extract_text_from_txt
+from pypdf import PdfReader
 
 app = FastAPI()
 
-#Test APi key
+#Test APi key - this is a test api to test the application
 VALID_API_KEY = "1234"
 
 @app.get("/")
@@ -22,27 +22,24 @@ async def predict_cv(
     #validate API Key
     if api_key != VALID_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid API Key")
-    #validate file type
-    allowed_file_types = [ 'application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain']
-    if file.content_type not in allowed_file_types:
-        raise HTTPException(status_code=400, detail=f"Unsupported file type: {file.content_type}")
-
-    #Extract Text
-
+    #ensure file is a pdf
+ 
+    # Ensure the file is a PDF
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
     try:
-        if file.content_type == 'application/pdf':
-            extracted_text = await extract_text_from_pdf(file)
-        elif file.content_type == 'application/vnd.opexmlformats-officedocument.wordprocessingml.document':
-            extracted_text = await extract_text_from_docx(file)
-        elif file.content_type == 'text/plain':
-            extracted_text = await extract_text_from_txt(file)
-        else:
-            raise HTTPEXCEPTION(status_code=400, detail="Unsupported file type")
+        # Read file content into PdfReader
+        contents = await file.read()
+        with open("temp.pdf", "wb") as temp_file:
+            temp_file.write(contents)
+        reader = PdfReader("temp.pdf")
+        num_pages = len(reader.pages)
+        page = reader.pages[0]
+        text = page.extract_text()
+        return {
+            "filename": file.filename,
+            "total_pages": num_pages,
+            "first_page_text": text
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"File processing error: {str(e)}")
-
-    return JSONResponse({
-        "message": "File and API key accepted.",
-        "fiilename": file.filename,
-        "content_type": file.content_type
-        })
+        raise HTTPException(status_code=500, detail=f"Error reading PDF: {str(e)}")
