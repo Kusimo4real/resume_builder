@@ -1,3 +1,4 @@
+from math import exp
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -5,6 +6,12 @@ from pypdf import PdfReader
 import base64
 import io
 import re
+import pandas as pd
+import numpy as np
+import os
+import joblib
+
+from utils import calculate_degree_level, calculate_experience, calculate_resume_score
 
 app = FastAPI()
 
@@ -75,16 +82,70 @@ async def predict_cv(request: PDFRequest):
         def extract_degree_level(text: str) -> str:
             match = re.search(r"EDUCATION\s*(.+?)(?:\n[A-Z ]{3,}\n|\n\s*\n|$)", text, re.S | re.I)
             return match.group(1).strip() if match else ""
+        
+        degree = extract_degree_level(text)
+        
+        degree_score = calculate_degree_level(degree)
+
+        experience = extract_experience(text)
+        experience_score = calculate_experience(experience)
+        
+        skills = extract_skills(text)
+        number_of_jobs = extract_number_of_jobs(None)
+        
+        # Calculate resume score
+        resume_score = calculate_resume_score(experience_score, len(skills), degree_score, int(has_linkedin(text)), number_of_jobs)
+        
+        # build dataframe as model input
+        df = pd.DataFrame([
+            {
+                "total_experience": float(calculate_experience(experience)),
+                "num_of_skills": float(len(skills)),
+                "degree_level": float(degree_score),
+                "has_linkedin_profile": float(has_linkedin(text)),
+                "num_of_jobs": float(number_of_jobs),
+                "resume_score": resume_score
+            }
+        ])
+        
+        clf = joblib.load(r"resume_match_model.pkl")
+        
+        job_match_prediction = clf.predict(df)
+        job_match_probabilities = clf.predict_proba(df)
+        # Predict using the model
+        
 
         # Build and return structured response
         return {
-            "total_experience": extract_experience(text),
-            "skills": extract_skills(text),
-            "num_of_skills": len(extract_skills(text)),
-            "has_linkedin": has_linkedin(text),
-            "degree_level": extract_degree_level(text)
-        }
+            "qualities" : {
+                "total_experience": float(calculate_experience(experience)),
+                "num_of_skills": float(len(skills)),
+                "degree_level": float(degree_score),
+                "has_linkedin_profile": float(has_linkedin(text)),
+                "num_of_jobs": float(number_of_jobs),
+                "resume_score": resume_score
+            },
+            "job_match_prediction": job_match_prediction[0],
+            "job_match_probabilities": job_match_probabilities[0].tolist(),
+            }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
 
+
+
+def extract_number_of_jobs(text: str | None) -> int:
+    """
+    Extracts the number of jobs from the text.
+    """
+    try:
+        if text is None:
+            return 2
+        # Use regex to find the number of jobs
+        # match = re.search(r"(\d+)\s+years?\s+of\s+experience", text, re.I)
+        # if match:
+        #     return int(match.group(1))
+        # else:
+        #     return 0
+    except Exception as e:
+        raise Exception(f"Error extracting number of jobs: {str(e)}")
