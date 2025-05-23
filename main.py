@@ -11,7 +11,7 @@ import numpy as np
 import os
 import joblib
 
-from utils import calculate_degree_level, calculate_experience, calculate_resume_score
+from utils import calculate_degree_level, calculate_experience, calculate_resume_score, match_resume
 
 app = FastAPI()
 
@@ -19,7 +19,7 @@ VALID_API_KEY = "1234"
 
 class PDFRequest(BaseModel):
     api_key: str
-    jop_posting:object | str
+    job_posting:object | str
     file_base64: str  # base64-encoded PDF
 
 @app.get("/")
@@ -119,75 +119,14 @@ async def predict_cv(request: PDFRequest):
                 "experience": len(extract_experience(text)),
             }
             
-        degree = extract_degree_level(text)
+        resume_data = parse_resume(text)
+        # print(resume_data)
         
-        degree_score = calculate_degree_level(degree)
-
-
+        response = match_resume(request.job_posting, resume_data)
+        if response is None:
+            raise HTTPException(status_code=400, detail="Error matching resume with job posting")
+        return response
         
-        experience = extract_experience(text)
-        print(experience)
-        print(type(experience))
-        print(len(experience))
-        new_string = len(experience)
-        new_string_int = str(new_string)
-        print(type(new_string_int))
-       
-        experience_score = calculate_experience(new_string_int)
-        
-        skills = extract_skills(text)
-        number_of_jobs = extract_number_of_jobs(None)
-
-        print("Resume"+str(experience_score))
-        
-        
-        # Calculate resume score
-        resume_score = calculate_resume_score(experience_score, len(skills), degree_score, int(has_linkedin(text)), number_of_jobs)
-        print("1>>>")
-        # print(t)
-        print(request.jop_posting)
-        
-        # build dataframe as model input
-        df = pd.DataFrame([
-            {
-                #"total_experience": float(calculate_experience(experience)),
-                "total_experience": float(experience_score),
-                "num_of_skills": float(len(skills)),
-                "degree_level": float(degree_score),
-                "has_linkedin_profile": float(has_linkedin(text)),
-                "num_of_jobs": float(number_of_jobs),
-                "resume_score": resume_score,
-                "full_resume": text,
-                "job_listing": parse_resume(text)
-            }
-        ])
-        print(df.to_json())
-        clf = joblib.load(r"resume_match_model.pkl")
-        print("5")
-        
-        job_match_prediction = clf.predict(df)
-        print("4")
-        job_match_probabilities = clf.predict_proba(df)
-        print("2")
-        # Predict using the model
-        
-        print("check exp")
-        print(experience)
-
-        # Build and return structured response
-        print("3")
-        return {
-            "qualities" : {
-                "total_experience": len(experience),
-                "num_of_skills": float(len(skills)),
-                "degree_level": float(degree_score),
-                "has_linkedin_profile": float(has_linkedin(text)),
-                "num_of_jobs": float(number_of_jobs),
-                "resume_score": resume_score
-            },
-            "job_match_prediction": job_match_prediction[0],
-            "job_match_probabilities": job_match_probabilities[0].tolist(),
-            }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
