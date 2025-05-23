@@ -19,6 +19,7 @@ VALID_API_KEY = "1234"
 
 class PDFRequest(BaseModel):
     api_key: str
+    jop_posting:object | str
     file_base64: str  # base64-encoded PDF
 
 @app.get("/")
@@ -44,22 +45,29 @@ async def predict_cv(request: PDFRequest):
             if page_text:
                 text += page_text + "\n"
 
-        # Extract experience
-        def extract_experience(text: str) -> int:
-            match = re.search(r"(\d+)\+?\s+years? (?:of )?experience", text, re.I)
-            return int(match.group(1)) if match else 0
+    #Extract experience
+        def extract_section(text: str, section_keywords) -> str:
+            pattern = r"|".join([rf"{kw}[\s:]*" for kw in section_keywords])
+            match = re.search(pattern, text, re.IGNORECASE)
+            if not match:
+                return ""
+            start = match.end()
+            end = len(text)
+            next_section = re.search(r"\n[A-Z][^\n]{1,50}\n", text[start:])
+            if next_section:
+                end = start + next_section.start()
+            return text[start:end].strip()
+            
+        def extract_experience(text: str) -> list:
+            section = extract_section(text, ["experience", "work history", "professional experience"])
+            lines = section.split('\n')
+            return [line.strip() for line in lines if line.strip()]
 
         # Extract number of skills
-        def extract_skills(text: str):
-            skill_sections = re.findall(r"(?:Technical Skills|Soft Skills|Other Skills):(.+?)(?:\n[A-Z][a-z]+:|$)", text, re.I | re.S)
-            skills = set()
-            for section in skill_sections:
-                items = re.split(r"[,\n]", section)
-                for item in items:
-                    skill = item.strip()
-                    if skill:
-                        skills.add(skill)
-            return sorted(skills)
+        def extract_skills(text: str) -> list:
+            section = extract_section(text, ["skills", "technical skills"])
+            items = re.split(r"[•\n,-]", section)
+            return [item.strip() for item in items if len(item.strip()) > 1]
 
         """
         def extract_skills(text: str) -> int:
@@ -76,49 +84,101 @@ async def predict_cv(request: PDFRequest):
 
         # Check for LinkedIn
         def has_linkedin(text: str) -> bool:
-            return bool(re.search(r"https?://(www\.)?linkedin\.com", text, re.I))
+            #return bool(re.search(r"https?://(www\.)?linkedin\.com", text, re.I))
+            return bool(re.search(r"(https?://)?(www\.)?linkedin\.com", text, re.I))
 
         # Extract education
         def extract_degree_level(text: str) -> str:
             match = re.search(r"EDUCATION\s*(.+?)(?:\n[A-Z ]{3,}\n|\n\s*\n|$)", text, re.S | re.I)
             return match.group(1).strip() if match else ""
         
+        def extract_education(text: str) -> list:
+            section = extract_section(text, ["education", "academic background", "qualifications"])
+            lines = section.split('\n')
+            return [line.strip() for line in lines if line.strip()]
+
+        def extract_email(text: str) -> str:
+            match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
+            return match.group(0) if match else ""
+
+        def extract_phone(text: str) -> str:
+            match = re.search(r"(\+?\d{1,3}[\s-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}", text)
+            return match.group(0) if match else ""
+        
+        def extract_name(text: str) -> str:
+            lines = text.strip().split('\n')
+            return lines[0].strip() if lines else ""
+        
+        def parse_resume(text: str) -> dict:
+            return {
+                "name": extract_name(text),
+                "email": extract_email(text),
+                "phone": extract_phone(text),
+                "skills": extract_skills(text),
+                "education": extract_education(text),
+                "experience": len(extract_experience(text)),
+            }
+            
         degree = extract_degree_level(text)
         
         degree_score = calculate_degree_level(degree)
 
+
+        
         experience = extract_experience(text)
-        experience_score = calculate_experience(experience)
+        print(experience)
+        print(type(experience))
+        print(len(experience))
+        new_string = len(experience)
+        new_string_int = str(new_string)
+        print(type(new_string_int))
+       
+        experience_score = calculate_experience(new_string_int)
         
         skills = extract_skills(text)
         number_of_jobs = extract_number_of_jobs(None)
+
+        print("Resume"+str(experience_score))
+        
         
         # Calculate resume score
         resume_score = calculate_resume_score(experience_score, len(skills), degree_score, int(has_linkedin(text)), number_of_jobs)
+        print("1>>>")
+        # print(t)
+        print(request.jop_posting)
         
         # build dataframe as model input
         df = pd.DataFrame([
             {
-                "total_experience": float(calculate_experience(experience)),
+                #"total_experience": float(calculate_experience(experience)),
+                "total_experience": float(experience_score),
                 "num_of_skills": float(len(skills)),
                 "degree_level": float(degree_score),
                 "has_linkedin_profile": float(has_linkedin(text)),
                 "num_of_jobs": float(number_of_jobs),
-                "resume_score": resume_score
+                "resume_score": resume_score,
+                "full_resume": text,
+                "job_listing": parse_resume(text)
             }
         ])
-        
+        print(df.to_json())
         clf = joblib.load(r"resume_match_model.pkl")
+        print("5")
         
         job_match_prediction = clf.predict(df)
+        print("4")
         job_match_probabilities = clf.predict_proba(df)
+        print("2")
         # Predict using the model
         
+        print("check exp")
+        print(experience)
 
         # Build and return structured response
+        print("3")
         return {
             "qualities" : {
-                "total_experience": float(calculate_experience(experience)),
+                "total_experience": len(experience),
                 "num_of_skills": float(len(skills)),
                 "degree_level": float(degree_score),
                 "has_linkedin_profile": float(has_linkedin(text)),
