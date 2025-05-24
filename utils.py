@@ -39,6 +39,9 @@ class MatchResponse(BaseModel):
     experience_match_score: float
     probabilities: dict
     features_used: dict
+    name: str
+    email: str
+    phone: str
 
 """
     _summary_
@@ -218,7 +221,10 @@ def match_resume(job_posting: JobPosting, resume: Resume):
         skill_match_score=round(skill_match_score, 4),
         experience_match_score=round(experience_match_score, 4),
         probabilities=prob_dict,
-        features_used=features.to_dict(orient='records')[0]
+        features_used=features.to_dict(orient='records')[0],
+        name: resume["name"],
+        email: resume["email"],
+        phone: resume["phone"]
     )
 
     return response
