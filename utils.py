@@ -362,10 +362,10 @@ def get_AI_feedback(job_posting: Optional[JobPosting], resume: Optional[Resume],
         
         # If resume and job_posting are provided, include them as context
         if job_posting and resume:
-            job_role = job_posting["job_role"].strip()
+            job_role = job_posting.job_role.strip()
             prompt = f"""
 You are a professional HR assistant specializing in recruitment and resume evaluation. 
-Context: A candidate, {resume['name']}, applied for a {job_role} role requiring {', '.join(job_posting['skills'])} and {job_posting['experience']} years of experience. 
+Context: A candidate, {resume['name']}, applied for a {job_role} role requiring {', '.join(job_posting.skills)} and {job_posting.experience} years of experience. 
 Their skills: {', '.join(resume['skills'][:5])}. Experience: {resume['experience']} years. Education: {resume['education'][0] if resume['education'] else 'Unknown'}.
 User prompt: {message_prompt}
 Respond concisely (100-150 words) in a professional, HR-focused manner.
@@ -384,10 +384,10 @@ Respond concisely (100-150 words) in a professional, HR-focused manner, ensuring
         return {"llm_response": "Error: Both job_posting and resume are required for default recruiter feedback."}
 
     # Existing logic for default recruiter response
-    job_role = job_posting["job_role"].strip()
-    required_skills = job_posting["skills"]
-    required_years = job_posting["experience"]
-    required_degree = job_posting["education"].lower().strip()
+    job_role = job_posting.job_role.strip()
+    required_skills = job_posting.skills
+    required_years = job_posting.experience
+    required_degree = job_posting.education.lower().strip()
 
     # Load model and scaler
     model_path = Path(f"models/resume_match_model_{job_role.replace(' ', '_')}.pkl")

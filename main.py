@@ -25,8 +25,8 @@ async def predict_cv(request: PDFRequest):
         job_posting = None
 
         # Parse resume if file_base64 is provided
-        if request.resume_file_base64:
-            decoded_pdf = base64.b64decode(request.resume_file_base64)
+        if request.file_base64:
+            decoded_pdf = base64.b64decode(request.file_base64)
             pdf_file = io.BytesIO(decoded_pdf)
             reader = PdfReader(pdf_file)
             text = ""

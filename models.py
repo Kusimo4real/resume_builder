@@ -9,7 +9,6 @@ from typing import List, Optional, Dict
 """
 
 class JobPosting(BaseModel):
-    api_key: str
     job_role: str
     department: str
     skills: List[str]
@@ -17,8 +16,6 @@ class JobPosting(BaseModel):
     location: str
     education: str
     description: str
-    resume_file_base64: str
-
 class Resume(BaseModel):
     name: str
     email: str
@@ -42,5 +39,5 @@ class MatchResponse(BaseModel):
 class PDFRequest(BaseModel):
     api_key: str
     job_posting: Optional[Dict] = None  # Make optional
-    resume_file_base64: Optional[str] = None   # Make optional
+    file_base64: Optional[str] = None   # Make optional
     message_prompt: Optional[str] = None  # New field
