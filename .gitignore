@@ -7,5 +7,9 @@ venv/
 .venv/
 env/
 
-response.json
-resume.json
+.env
+
+test_json/
+
+
+api_key.txt
