@@ -1,12 +1,15 @@
 
-from typing import List
+from typing import List, Dict
 import pandas as pd
 from fastapi import HTTPException
 import joblib
 import pandas as pd
 from pathlib import Path
 import re
+import requests
 from models import JobPosting, Resume, MatchResponse
+from openai import OpenAI
+from config import settings
 
 
 
@@ -191,7 +194,6 @@ def match_resume(job_posting: JobPosting, resume: Resume):
     #     raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
     # Extract relevant job posting fields
-    print(job_posting)
     job_role = job_posting["job_role"].strip()
     required_skills = job_posting["skills"]
     required_years = job_posting["experience"]
@@ -285,3 +287,124 @@ def extract_number_of_jobs(text: str | None) -> int:
         #     return 0
     except Exception as e:
         raise Exception(f"Error extracting number of jobs: {str(e)}")
+
+
+
+def get_AI_feedback(job_posting: JobPosting, resume: Resume) -> Dict:
+    """Match a resume against a job posting and return match strength, probabilities, and recruiter response."""
+    # Extract relevant job posting fields
+    job_role = job_posting["job_role"].strip()
+    required_skills = job_posting["skills"]
+    required_years = job_posting["experience"]
+    required_degree = job_posting["education"].lower().strip()
+
+    # Load model and scaler
+    model_path = Path(f"models/resume_match_model_{job_role.replace(' ', '_')}.pkl")
+    scaler_path = Path(f"models/scaler_{job_role.replace(' ', '_')}.pkl")
+    
+    try:
+        model = joblib.load(model_path)
+        scaler = joblib.load(scaler_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Model or scaler for job role '{job_role}' not found")
+
+    # Compute skill_match_score
+    skill_match_score = compute_skill_match(resume['skills'], required_skills)
+
+    # Compute experience_match_score (convert resume experience to years)
+    resume_experience_years = resume['experience']  # Assuming this is already in years
+    experience_match_score = compute_experience_match(resume_experience_years, required_years)
+
+    # Compute match_score and match_label
+    match_score = compute_match_score(skill_match_score, experience_match_score)
+    match_label = match_score_to_label(match_score)
+
+    # Prepare features for model prediction
+    degree_mapping = {
+        'high school': 1,
+        'bachelor': 2,
+        'master': 3,
+        'phd': 4,
+        'doctorate': 4
+    }
+    resume_education = resume['education'][0].lower() if resume['education'] else ''
+    degree_level = next((degree_mapping[deg] for deg in degree_mapping if deg in resume_education), 2)  # Default to Bachelor's
+
+    # Assumptions for missing features
+    total_experience_months = resume['experience'] * 12  # Convert years to months
+    has_linkedin_profile = 1  # Assume yes
+    num_of_jobs = 2  # Default
+
+    features = pd.DataFrame({
+        'total_experience': [total_experience_months],
+        'degree_level': [degree_level],
+        'has_linkedin_profile': [has_linkedin_profile],
+        'num_of_jobs': [num_of_jobs]
+    })
+
+    # Clip features
+    features['total_experience'] = features['total_experience'].clip(upper=120)
+    features['num_of_jobs'] = features['num_of_jobs'].clip(upper=6)
+
+    # Scale features
+    features_scaled = scaler.transform(features)
+
+    # Predict probabilities
+    probabilities = model.predict_proba(features_scaled)[0]
+    prob_dict = {cls: round(float(prob), 4) for cls, prob in zip(model.classes_, probabilities)}
+
+    # Call DeepSeek API for llm response
+    deepseek_api_key = settings.deepseek_api_key_open_router
+    if not deepseek_api_key:
+        llm_response = "Error: DeepSeek API key not configured."
+    else:
+        try:
+            client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=deepseek_api_key)
+            prompt = f"""
+You are a professional hiring manager reviewing a candidate for a {job_role} position. The job requires the following skills: {', '.join(required_skills)}, {required_years} years of experience, and a {required_degree} degree. 
+
+The candidate, {resume['name']}, has:
+- Skills: {', '.join(resume['skills'][:5])} (and more)
+- Experience: {resume['experience']} years
+- Education: {resume['education'][0] if resume['education'] else 'Unknown'}
+
+Based on our evaluation:
+- Skill Match Score: {skill_match_score:.4f}
+- Experience Match Score: {experience_match_score:.4f}
+- Overall Match Score: {match_score:.2f}
+- Match Label: {match_label}
+- Probabilities: {prob_dict}
+
+Write a concise, professional, and human-like response (100-150 words) evaluating the candidate’s fit for the role. Highlight their strengths, note any gaps, and suggest next steps (e.g., interview, further training). Use a positive and encouraging tone.
+            """
+            payload = {
+                # "model": "deepseek-chat",
+                "model": "deepseek/deepseek-r1:free",
+                "messages": [{"role": "user", "content": prompt}],
+                # "max_tokens": 200,
+                # "temperature": 0.7
+            }
+            # response = requests.post(deepseek_url, json=payload, headers=headers)
+            # response.raise_for_status()
+            response = client.chat.completions.create(**payload)
+            # llm_response = response.json()["choices"][0]["message"]["content"].strip()
+            llm_response = response.choices[0].message.content.strip()
+        except requests.RequestException as e:
+            llm_response = f"Error: Failed to generate recruiter response ({str(e)})"
+
+    # Prepare response
+    response = MatchResponse(
+        job_role=job_role,
+        candidate_name=resume['name'],
+        match_label=match_label,
+        match_score=round(match_score, 2),
+        skill_match_score=round(skill_match_score, 4),
+        experience_match_score=round(experience_match_score, 4),
+        probabilities=prob_dict,
+        features_used=features.to_dict(orient='records')[0],
+        contact_email=resume["email"],
+        contact_phone=resume["phone"],
+        llm_response=llm_response  # New field
+    )
+
+    return response.__dict__  # Convert to dict for API response

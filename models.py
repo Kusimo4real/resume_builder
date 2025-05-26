@@ -42,3 +42,4 @@ class MatchResponse(BaseModel):
     features_used: dict
     contact_email: str
     contact_phone: str
+    llm_response: str

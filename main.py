@@ -1,11 +1,13 @@
+from urllib import response
 from fastapi import FastAPI, HTTPException
+from fastapi.background import P
 from fastapi.responses import JSONResponse
 from models import PDFRequest
 from pypdf import PdfReader
 import base64
 import io
 
-from utils import match_resume, parse_resume
+from utils import get_AI_feedback, match_resume, parse_resume
 
 app = FastAPI()
 
@@ -41,7 +43,9 @@ async def predict_cv(request: PDFRequest):
         resume_data = parse_resume(text)
         # print(resume_data)
         
-        response = match_resume(request.job_posting, resume_data)
+        # response = match_resume(request.job_posting, resume_data)
+        response = get_AI_feedback(request.job_posting, resume_data)
+        print(response)
         if response is None:
             raise HTTPException(status_code=400, detail="Error matching resume with job posting")
         return response
