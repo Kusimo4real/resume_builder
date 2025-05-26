@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional, Dict
 
 
 """
@@ -7,10 +7,6 @@ from typing import List
  It includes models for handling PDF requests, job postings,
  resumes, and match responses.
 """
-class PDFRequest(BaseModel):
-    api_key: str
-    job_posting:object | str
-    file_base64: str  # base64-encoded PDF
 
 class JobPosting(BaseModel):
     api_key: str
@@ -21,7 +17,7 @@ class JobPosting(BaseModel):
     location: str
     education: str
     description: str
-    file_base64: str
+    resume_file_base64: str
 
 class Resume(BaseModel):
     name: str
@@ -43,3 +39,8 @@ class MatchResponse(BaseModel):
     contact_email: str
     contact_phone: str
     llm_response: str
+class PDFRequest(BaseModel):
+    api_key: str
+    job_posting: Optional[Dict] = None  # Make optional
+    resume_file_base64: Optional[str] = None   # Make optional
+    message_prompt: Optional[str] = None  # New field
