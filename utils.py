@@ -1,5 +1,5 @@
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import pandas as pd
 from fastapi import HTTPException
 import joblib
@@ -205,127 +205,7 @@ def extract_number_of_jobs(text: str | None) -> int:
 
 
 
-# def get_AI_feedback(job_posting: JobPosting, resume: Resume) -> Dict:
-#     """Match a resume against a job posting and return match strength, probabilities, and recruiter response."""
-#     # Extract relevant job posting fields
-#     job_role = job_posting["job_role"].strip()
-#     required_skills = job_posting["skills"]
-#     required_years = job_posting["experience"]
-#     required_degree = job_posting["education"].lower().strip()
-
-#     # Load model and scaler
-#     model_path = Path(f"models/resume_match_model_{job_role.replace(' ', '_')}.pkl")
-#     scaler_path = Path(f"models/scaler_{job_role.replace(' ', '_')}.pkl")
-    
-#     try:
-#         model = joblib.load(model_path)
-#         scaler = joblib.load(scaler_path)
-#     except FileNotFoundError:
-#         raise HTTPException(status_code=404, detail=f"Model or scaler for job role '{job_role}' not found")
-
-#     # Compute skill_match_score
-#     skill_match_score = compute_skill_match(resume['skills'], required_skills)
-
-#     # Compute experience_match_score (convert resume experience to years)
-#     resume_experience_years = resume['experience']  # Assuming this is already in years
-#     experience_match_score = compute_experience_match(resume_experience_years, required_years)
-
-#     # Compute match_score and match_label
-#     match_score = compute_match_score(skill_match_score, experience_match_score)
-#     match_label = match_score_to_label(match_score)
-
-#     # Prepare features for model prediction
-#     degree_mapping = {
-#         'high school': 1,
-#         'bachelor': 2,
-#         'master': 3,
-#         'phd': 4,
-#         'doctorate': 4
-#     }
-#     resume_education = resume['education'][0].lower() if resume['education'] else ''
-#     degree_level = next((degree_mapping[deg] for deg in degree_mapping if deg in resume_education), 2)  # Default to Bachelor's
-
-#     # Assumptions for missing features
-#     total_experience_months = resume['experience'] * 12  # Convert years to months
-#     has_linkedin_profile = 1  # Assume yes
-#     num_of_jobs = 2  # Default
-
-#     features = pd.DataFrame({
-#         'total_experience': [total_experience_months],
-#         'degree_level': [degree_level],
-#         'has_linkedin_profile': [has_linkedin_profile],
-#         'num_of_jobs': [num_of_jobs]
-#     })
-
-#     # Clip features
-#     features['total_experience'] = features['total_experience'].clip(upper=120)
-#     features['num_of_jobs'] = features['num_of_jobs'].clip(upper=6)
-
-#     # Scale features
-#     features_scaled = scaler.transform(features)
-
-#     # Predict probabilities
-#     probabilities = model.predict_proba(features_scaled)[0]
-#     prob_dict = {cls: round(float(prob), 4) for cls, prob in zip(model.classes_, probabilities)}
-
-#     # Call DeepSeek API for llm response
-#     deepseek_api_key = settings.deepseek_api_key_open_router
-#     if not deepseek_api_key:
-#         llm_response = "Error: DeepSeek API key not configured."
-#     else:
-#         try:
-#             client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=deepseek_api_key)
-#             prompt = f"""
-# You are a professional hiring manager reviewing a candidate for a {job_role} position. The job requires the following skills: {', '.join(required_skills)}, {required_years} years of experience, and a {required_degree} degree. 
-
-# The candidate, {resume['name']}, has:
-# - Skills: {', '.join(resume['skills'][:5])} (and more)
-# - Experience: {resume['experience']} years
-# - Education: {resume['education'][0] if resume['education'] else 'Unknown'}
-
-# Based on our evaluation:
-# - Skill Match Score: {skill_match_score:.4f}
-# - Experience Match Score: {experience_match_score:.4f}
-# - Overall Match Score: {match_score:.2f}
-# - Match Label: {match_label}
-# - Probabilities: {prob_dict}
-
-# Write a concise, professional, and human-like response (100-150 words) evaluating the candidate’s fit for the role. Highlight their strengths, note any gaps, and suggest next steps (e.g., interview, further training). Use a positive and encouraging tone.
-#             """
-#             payload = {
-#                 # "model": "deepseek-chat",
-#                 "model": "deepseek/deepseek-r1:free",
-#                 "messages": [{"role": "user", "content": prompt}],
-#                 # "max_tokens": 200,
-#                 # "temperature": 0.7
-#             }
-#             # response = requests.post(deepseek_url, json=payload, headers=headers)
-#             # response.raise_for_status()
-#             response = client.chat.completions.create(**payload)
-#             # llm_response = response.json()["choices"][0]["message"]["content"].strip()
-#             llm_response = response.choices[0].message.content.strip()
-#         except requests.RequestException as e:
-#             llm_response = f"Error: Failed to generate recruiter response ({str(e)})"
-
-#     # Prepare response
-#     response = MatchResponse(
-#         job_role=job_role,
-#         candidate_name=resume['name'],
-#         match_label=match_label,
-#         match_score=round(match_score, 2),
-#         skill_match_score=round(skill_match_score, 4),
-#         experience_match_score=round(experience_match_score, 4),
-#         probabilities=prob_dict,
-#         features_used=features.to_dict(orient='records')[0],
-#         contact_email=resume["email"],
-#         contact_phone=resume["phone"],
-#         llm_response=llm_response  # New field
-#     )
-
-#     return response.__dict__  # Convert to dict for API response
-
-
-def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free") -> str:
+def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free", max_tokens: int = 200) -> str:
     deepseek_api_key = settings.deepseek_api_key_open_router
     if not deepseek_api_key:
         return "Error: DeepSeek API key not configured."
@@ -341,7 +221,6 @@ def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free") -> 
         return f"Error: Failed to generate response ({str(e)})"
 
 
-# New function to classify prompt intent
 def classify_prompt_intent(prompt: str) -> bool:
     classification_prompt = f"""
 You are an HR assistant specializing in recruitment, resume evaluation, and candidate feedback. 
@@ -349,41 +228,10 @@ Determine if the following user prompt is related to HR operations (e.g., resume
 Prompt: "{prompt}"
 Respond with only "HR-related" or "non-HR" based on the prompt's intent.
     """
-    response = call_deepseek_api(classification_prompt)
+    response = call_deepseek_api(classification_prompt, max_tokens=10)
     return response == "HR-related"
 
-
-def get_AI_feedback(job_posting: Optional[JobPosting], resume: Optional[Resume], message_prompt: Optional[str] = None) -> Dict:
-    """Generate AI feedback for a resume or custom HR prompt, restricted to HR operations."""
-    # Case 1: Custom prompt provided
-    if message_prompt:
-        if not classify_prompt_intent(message_prompt):
-            return {"llm_response": "This AI is restricted to HR-related tasks, such as resume evaluation, job matching, interview preparation, or recruitment advice."}
-        
-        # If resume and job_posting are provided, include them as context
-        if job_posting and resume:
-            job_role = job_posting.job_role.strip()
-            prompt = f"""
-You are a professional HR assistant specializing in recruitment and resume evaluation. 
-Context: A candidate, {resume['name']}, applied for a {job_role} role requiring {', '.join(job_posting.skills)} and {job_posting.experience} years of experience. 
-Their skills: {', '.join(resume['skills'][:5])}. Experience: {resume['experience']} years. Education: {resume['education'][0] if resume['education'] else 'Unknown'}.
-User prompt: {message_prompt}
-Respond concisely (100-150 words) in a professional, HR-focused manner.
-            """
-        else:
-            prompt = f"""
-You are a professional HR assistant specializing in recruitment and resume evaluation. 
-User prompt: {message_prompt}
-Respond concisely (100-150 words) in a professional, HR-focused manner, ensuring the response is relevant to HR operations.
-            """
-        llm_response = call_deepseek_api(prompt)
-        return {"llm_response": llm_response}
-
-    # Case 2: Default recruiter response (requires job_posting and resume)
-    if not (job_posting and resume):
-        return {"llm_response": "Error: Both job_posting and resume are required for default recruiter feedback."}
-
-    # Existing logic for default recruiter response
+def process_single_resume(resume: Resume, job_posting: JobPosting) -> MatchResponse:
     job_role = job_posting.job_role.strip()
     required_skills = job_posting.skills
     required_years = job_posting.experience
@@ -400,13 +248,13 @@ Respond concisely (100-150 words) in a professional, HR-focused manner, ensuring
         raise HTTPException(status_code=404, detail=f"Model or scaler for job role '{job_role}' not found")
 
     # Compute scores
-    skill_match_score = compute_skill_match(resume['skills'], required_skills)
-    resume_experience_years = resume['experience']
+    skill_match_score = compute_skill_match(resume["skills"], required_skills)
+    resume_experience_years = resume["experience"]
     experience_match_score = compute_experience_match(resume_experience_years, required_years)
     match_score = compute_match_score(skill_match_score, experience_match_score)
     match_label = match_score_to_label(match_score)
 
-    # Prepare features for model prediction
+    # Prepare features
     degree_mapping = {
         'high school': 1,
         'bachelor': 2,
@@ -414,10 +262,10 @@ Respond concisely (100-150 words) in a professional, HR-focused manner, ensuring
         'phd': 4,
         'doctorate': 4
     }
-    resume_education = resume['education'][0].lower() if resume['education'] else ''
+    resume_education = resume["education"][0].lower() if resume["education"] else ''
     degree_level = next((degree_mapping[deg] for deg in degree_mapping if deg in resume_education), 2)
 
-    total_experience_months = resume['experience'] * 12
+    total_experience_months = resume["experience"] * 12
     has_linkedin_profile = 1
     num_of_jobs = 2
 
@@ -435,27 +283,9 @@ Respond concisely (100-150 words) in a professional, HR-focused manner, ensuring
     probabilities = model.predict_proba(features_scaled)[0]
     prob_dict = {cls: round(float(prob), 4) for cls, prob in zip(model.classes_, probabilities)}
 
-    # Generate default recruiter response
-    prompt = f"""
-You are a professional hiring manager reviewing a candidate for a {job_role} position. The job requires: {', '.join(required_skills)}, {required_years} years of experience, and a {required_degree} degree. 
-The candidate, {resume['name']}, has:
-- Skills: {', '.join(resume['skills'][:5])} (and more)
-- Experience: {resume['experience']} years
-- Education: {resume['education'][0] if resume['education'] else 'Unknown'}
-Evaluation:
-- Skill Match Score: {skill_match_score:.4f}
-- Experience Match Score: {experience_match_score:.4f}
-- Overall Match Score: {match_score:.2f}
-- Match Label: {match_label}
-- Probabilities: {prob_dict}
-Write a concise, professional response (100-150 words) evaluating the candidate’s fit, highlighting strengths, noting gaps, and suggesting next steps. Use a positive tone.
-    """
-    llm_response = call_deepseek_api(prompt)
-
-    # Prepare response
-    response = MatchResponse(
+    return MatchResponse(
         job_role=job_role,
-        candidate_name=resume['name'],
+        candidate_name=resume["name"],
         match_label=match_label,
         match_score=round(match_score, 2),
         skill_match_score=round(skill_match_score, 4),
@@ -464,7 +294,89 @@ Write a concise, professional response (100-150 words) evaluating the candidate�
         features_used=features.to_dict(orient='records')[0],
         contact_email=resume["email"],
         contact_phone=resume["phone"],
-        llm_response=llm_response
+        llm_response=""
     )
 
-    return response.__dict__
+def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting]]], default_job_posting: Optional[JobPosting] = None, message_prompt: Optional[str] = None) -> Dict:
+    """Generate AI feedback for single or multiple resumes or custom HR prompt."""
+    # Case 1: Custom prompt provided
+    if message_prompt:
+        if not classify_prompt_intent(message_prompt):
+            return {"llm_response": "This AI is restricted to HR-related tasks, such as resume evaluation, job matching, interview preparation, or recruitment advice."}
+        
+        # Include resume/job context if provided
+        if resumes and resumes[0][0]:
+            context = []
+            for resume, job_posting in resumes:
+                job_posting = job_posting or default_job_posting
+                if job_posting:
+                    context.append(f"Candidate: {resume['name']}, Role: {job_posting.job_role}, Skills: {', '.join(resume['skills'][:5])}, Experience: {resume['experience']} years")
+            prompt = f"""
+You are a professional HR assistant specializing in recruitment and resume evaluation. 
+Context: {'; '.join(context) if context else 'No resume/job context provided.'}
+User prompt: {message_prompt}
+Respond concisely (100-150 words) in a professional, HR-focused manner.
+            """
+        else:
+            prompt = f"""
+You are a professional HR assistant specializing in recruitment and resume evaluation. 
+User prompt: {message_prompt}
+Respond concisely (100-150 words) in a professional, HR-focused manner.
+            """
+        llm_response = call_deepseek_api(prompt)
+        results = []
+        if resumes and resumes[0][0]:
+            for resume, job_posting in resumes:
+                job_posting = job_posting or default_job_posting
+                if job_posting:
+                    match_response = process_single_resume(resume, job_posting)
+                    results.append(match_response.__dict__)
+        return {"results": results, "llm_response": llm_response}
+
+    # Case 2: Resume evaluation (single or multiple)
+    if not resumes or not (resumes[0][1] or default_job_posting):
+        return {"llm_response": "At least one resume and a job posting are required for evaluation."}
+
+    # Process resumes
+    results = []
+    for resume, job_posting in resumes:
+        job_posting = job_posting or default_job_posting
+        if job_posting:
+            match_response = process_single_resume(resume, job_posting)
+            results.append(match_response.__dict__)
+
+    # Rank resumes by match_score
+    results = sorted(results, key=lambda x: x['match_score'], reverse=True)
+
+    # Generate single LLM response
+    if len(results) == 1:
+        res = results[0]
+        job_posting_for_single_resume = default_job_posting if default_job_posting else resumes[0][1]
+        print(type(res))
+        prompt = f"""
+You are a professional hiring manager reviewing a candidate for a {res['job_role']} position requiring {', '.join(job_posting_for_single_resume.skills)}, {job_posting_for_single_resume.experience} years of experience, and a {job_posting_for_single_resume.education} degree. 
+Candidate: {res['candidate_name']}
+Skills: {', '.join(resumes[0][0]['skills'][:5])}
+Experience: {resumes[0][0]['experience']} years
+Education: {resumes[0][0]['education'][0] if resumes[0][0]['education'] else 'Unknown'}
+Evaluation:
+- Skill Match Score: {res['skill_match_score']:.4f}
+- Experience Match Score: {res['experience_match_score']:.4f}
+- Overall Match Score: {res['match_score']:.2f}
+- Match Label: {res['match_label']}
+Write a professional response evaluating the candidate’s fit, highlighting strengths, noting gaps, and suggesting next steps. Use a positive tone.
+        """
+    else:
+        # Multiple resumes
+        context = []
+        for i, res in enumerate(results, 1):
+            job_role = res['job_role']
+            context.append(f"Candidate {i}: {res['candidate_name']} for {job_role}, Match Score: {res['match_score']:.2f}, Skills: {', '.join(resumes[i-1][0]['skills'][:5])}, Experience: {resumes[i-1][0]['experience']} years")
+        prompt = f"""
+You are a professional hiring manager reviewing multiple candidates. 
+Context: {'; '.join(context)}.
+Ranked by match score, summarize the candidates’ fit for their respective roles (or shared role if applicable). Highlight top candidates’ strengths, note any common gaps, and suggest next steps (e.g., interviews, training). Keep the response comprehensive and professional.
+        """
+    llm_response = call_deepseek_api(prompt)
+
+    return {"results": results, "llm_response": llm_response}

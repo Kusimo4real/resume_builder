@@ -31,13 +31,18 @@ class MatchResponse(BaseModel):
     match_score: float
     skill_match_score: float
     experience_match_score: float
-    probabilities: dict
-    features_used: dict
+    probabilities: Dict[str, float]
+    features_used: Dict
     contact_email: str
     contact_phone: str
     llm_response: str
+
+class ResumeInput(BaseModel):
+    file_base64: str
+    job_posting: Optional[JobPosting] = None
+
 class PDFRequest(BaseModel):
     api_key: str
-    job_posting: Optional[Dict] = None  # Make optional
-    file_base64: Optional[str] = None   # Make optional
-    message_prompt: Optional[str] = None  # New field
+    resumes: List[ResumeInput]
+    job_posting: Optional[JobPosting] = None
+    message_prompt: Optional[str] = None
