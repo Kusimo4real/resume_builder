@@ -22,14 +22,14 @@ async def predict_cv(request: PDFRequest):
 
 # try:
     # Validate input
-    if not request.resumes:
-        raise HTTPException(status_code=400, detail="At least one resume is required.")
+    if not request.resumes and not request.message_prompt:
+        raise HTTPException(status_code=400, detail="At least one resume or a message prompt is required.")
 
     # Check job posting consistency
     has_default_job = request.job_posting is not None
     has_per_resume_jobs = any(resume_input.job_posting is not None for resume_input in request.resumes)
     
-    if not has_default_job and not has_per_resume_jobs:
+    if not has_default_job and not has_per_resume_jobs and not request.message_prompt:
         raise HTTPException(status_code=400, detail="A default job posting or per-resume job postings are required.")
     
     if has_default_job and has_per_resume_jobs:
