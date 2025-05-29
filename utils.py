@@ -205,7 +205,7 @@ def extract_number_of_jobs(text: str | None) -> int:
 
 
 
-def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free", max_tokens: int = 200) -> str:
+def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free", max_tokens: int = None) -> str:
     deepseek_api_key = settings.deepseek_api_key_open_router
     if not deepseek_api_key:
         return "Error: DeepSeek API key not configured."
@@ -215,21 +215,27 @@ def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free", max
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
         }
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
         response = client.chat.completions.create(**payload)
         return response.choices[0].message.content.strip()
     except Exception as e:
         return f"Error: Failed to generate response ({str(e)})"
 
 
-def classify_prompt_intent(prompt: str) -> bool:
-    classification_prompt = f"""
-You are an HR assistant specializing in recruitment, resume evaluation, and candidate feedback. 
-Determine if the following user prompt is related to HR operations (e.g., resume analysis, job matching, interview preparation, candidate evaluation, employee relations, or job description drafting).
+def assess_prompt_scope(prompt: str) -> str:
+    """Assess if a prompt is HR-relevant, general conversation, or out-of-scope."""
+    scope_prompt = f"""
+You are an HR assistant specializing in recruitment and resume evaluation.
+Determine if the following prompt is:
+- 'relevant': Related to HR (e.g., resume analysis, job matching, interview prep).
+- 'general': General conversation (e.g., greetings, casual chat).
+- 'out-of-scope': Unrelated to HR or inappropriate (e.g., sci-fi writing, complex non-HR tasks).
 Prompt: "{prompt}"
-Respond with only "HR-related" or "non-HR" based on the prompt's intent.
+Respond with only 'relevant', 'general', or 'out-of-scope'.
     """
-    response = call_deepseek_api(classification_prompt, max_tokens=10)
-    return response == "HR-related"
+    response = call_deepseek_api(scope_prompt, max_tokens=10)
+    return response
 
 def process_single_resume(resume: Resume, job_posting: JobPosting) -> MatchResponse:
     job_role = job_posting.job_role.strip()
@@ -297,33 +303,47 @@ def process_single_resume(resume: Resume, job_posting: JobPosting) -> MatchRespo
         llm_response=""
     )
 
+
+
 def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting]]], default_job_posting: Optional[JobPosting] = None, message_prompt: Optional[str] = None) -> Dict:
-    """Generate AI feedback for single or multiple resumes or custom HR prompt."""
+    """Generate AI feedback for single/multiple resumes or conversational prompts."""
     # Case 1: Custom prompt provided
     if message_prompt:
-        if not classify_prompt_intent(message_prompt):
-            return {"llm_response": "This AI is restricted to HR-related tasks, such as resume evaluation, job matching, interview preparation, or recruitment advice."}
+        scope = assess_prompt_scope(message_prompt)
         
-        # Include resume/job context if provided
+        # Build context if resumes are provided
+        context = []
         if resumes and resumes[0][0]:
-            context = []
             for resume, job_posting in resumes:
                 job_posting = job_posting or default_job_posting
                 if job_posting:
                     context.append(f"Candidate: {resume['name']}, Role: {job_posting.job_role}, Skills: {', '.join(resume['skills'][:5])}, Experience: {resume['experience']} years")
+        
+        # Handle prompt based on scope
+        if scope == 'relevant':
             prompt = f"""
-You are a professional HR assistant specializing in recruitment and resume evaluation. 
+You are a professional HR assistant specializing in recruitment and resume evaluation.
 Context: {'; '.join(context) if context else 'No resume/job context provided.'}
-User prompt: {message_prompt}
-Respond concisely in a professional, HR-focused manner.
-            """
-        else:
-            # Standalone HR prompt without resume context
-            prompt = f"""
-You are a professional HR assistant specializing in recruitment and resume evaluation. 
 User prompt: {message_prompt}
 Respond in a professional, HR-focused manner.
             """
+        elif scope == 'general':
+            prompt = f"""
+You are a friendly HR assistant specializing in recruitment and resume evaluation.
+Respond naturally and conversationally to the user's prompt, keeping a positive tone.
+You can engage in general chat but subtly steer toward HR-related topics when appropriate.
+User prompt: {message_prompt}
+            """
+        else:  # out-of-scope
+            prompt = f"""
+You are an HR assistant specializing in recruitment and resume evaluation.
+The user's prompt seems unrelated to HR tasks.
+Respond politely, explaining you're primarily an HR assistant, and suggest returning to HR topics.
+Keep the tone positive and professional.
+User prompt: {message_prompt}
+Example response: "I'm primarily an HR assistant focused on recruitment and resume evaluation. I can help with that or chat a bit, but let's keep it relevant!"
+            """
+        
         llm_response = call_deepseek_api(prompt)
         results = []
         if resumes and resumes[0][0]:
@@ -349,26 +369,30 @@ Respond in a professional, HR-focused manner.
     # Rank resumes by match_score
     results = sorted(results, key=lambda x: x['match_score'], reverse=True)
 
-    # Generate single LLM response
-    if len(results) == 1:
-        res = results[0]
-        job_posting_for_single_resume = default_job_posting if default_job_posting else resumes[0][1]
-        print(type(res))
+    # Generate individual LLM responses for each resume
+    for i, res in enumerate(results):
+        job_posting = resumes[i][1] or default_job_posting
         prompt = f"""
-You are a professional hiring manager reviewing a candidate for a {res['job_role']} position requiring {', '.join(job_posting_for_single_resume.skills)}, {job_posting_for_single_resume.experience} years of experience, and a {job_posting_for_single_resume.education} degree. 
+You are a professional hiring manager reviewing a candidate for a {res['job_role']} position requiring {', '.join(job_posting.skills)}, {job_posting.experience} years of experience, and a {job_posting.education} degree. 
 Candidate: {res['candidate_name']}
-Skills: {', '.join(resumes[0][0]['skills'][:5])}
-Experience: {resumes[0][0]['experience']} years
-Education: {resumes[0][0]['education'][0] if resumes[0][0]['education'] else 'Unknown'}
+Skills: {', '.join(resumes[i][0]['skills'][:5])}
+Experience: {resumes[i][0]['experience']} years
+Education: {resumes[i][0]['education'][0] if resumes[i][0]['education'] else 'Unknown'}
 Evaluation:
 - Skill Match Score: {res['skill_match_score']:.4f}
 - Experience Match Score: {res['experience_match_score']:.4f}
 - Overall Match Score: {res['match_score']:.2f}
 - Match Label: {res['match_label']}
-Write a professional response evaluating the candidate’s fit, highlighting strengths, noting gaps, and suggesting next steps. Use a positive tone.
+Write a concise, professional response (100-250 words) evaluating the candidate’s fit, highlighting strengths, noting gaps, and suggesting next steps. Use a positive tone.
         """
+        res['llm_response'] = call_deepseek_api(prompt)
+
+    # Generate summary LLM response
+    if len(results) == 1:
+        # For single resume, use the individual response as the summary
+        llm_response = results[0]['llm_response']
     else:
-        # Multiple resumes
+        # For multiple resumes, generate a summary
         context = []
         for i, res in enumerate(results, 1):
             job_role = res['job_role']
@@ -378,6 +402,6 @@ You are a professional hiring manager reviewing multiple candidates.
 Context: {'; '.join(context)}.
 Ranked by match score, summarize the candidates’ fit for their respective roles (or shared role if applicable). Highlight top candidates’ strengths, note any common gaps, and suggest next steps (e.g., interviews, training). Keep the response comprehensive and professional.
         """
-    llm_response = call_deepseek_api(prompt)
+        llm_response = call_deepseek_api(prompt)
 
     return {"results": results, "llm_response": llm_response}
