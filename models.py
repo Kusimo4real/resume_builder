@@ -43,6 +43,6 @@ class ResumeInput(BaseModel):
 
 class PDFRequest(BaseModel):
     api_key: str
-    resumes: List[ResumeInput]
+    resumes: List[ResumeInput] = []
     job_posting: Optional[JobPosting] = None
     message_prompt: Optional[str] = None

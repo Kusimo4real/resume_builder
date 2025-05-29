@@ -315,13 +315,14 @@ def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting]]], default_
 You are a professional HR assistant specializing in recruitment and resume evaluation. 
 Context: {'; '.join(context) if context else 'No resume/job context provided.'}
 User prompt: {message_prompt}
-Respond concisely (100-150 words) in a professional, HR-focused manner.
+Respond concisely in a professional, HR-focused manner.
             """
         else:
+            # Standalone HR prompt without resume context
             prompt = f"""
 You are a professional HR assistant specializing in recruitment and resume evaluation. 
 User prompt: {message_prompt}
-Respond concisely (100-150 words) in a professional, HR-focused manner.
+Respond in a professional, HR-focused manner.
             """
         llm_response = call_deepseek_api(prompt)
         results = []
