@@ -353,22 +353,22 @@ Example response: "I'm primarily an HR assistant focused on recruitment and resu
                     results.append(match_response.__dict__)
                     # get an llm response for each resume based on the job posting
         
-        for i, res in enumerate(results):
-            job_posting = resumes[i][1] or default_job_posting
-            prompt = f"""
-You are a professional hiring manager reviewing a candidate for a {res['job_role']} position requiring {', '.join(job_posting.skills)}, {job_posting.experience} years of experience, and a {job_posting.education} degree. 
-Candidate: {res['candidate_name']}
-Skills: {', '.join(resumes[i][0]['skills'][:5])}
-Experience: {resumes[i][0]['experience']} years
-Education: {resumes[i][0]['education'][0] if resumes[i][0]['education'] else 'Unknown'}
-Evaluation:
-- Skill Match Score: {res['skill_match_score']:.4f}
-- Experience Match Score: {res['experience_match_score']:.4f}
-- Overall Match Score: {res['match_score']:.2f}
-- Match Label: {res['match_label']}
-Write a concise, professional response (100-250 words) evaluating the candidate’s fit, highlighting strengths, noting gaps, and suggesting next steps. Use a positive tone.
-        """
-            res['llm_response'] = call_deepseek_api(prompt)
+#         for i, res in enumerate(results):
+#             job_posting = resumes[i][1] or default_job_posting
+#             prompt = f"""
+# You are a professional hiring manager reviewing a candidate for a {res['job_role']} position requiring {', '.join(job_posting.skills)}, {job_posting.experience} years of experience, and a {job_posting.education} degree. 
+# Candidate: {res['candidate_name']}
+# Skills: {', '.join(resumes[i][0]['skills'][:5])}
+# Experience: {resumes[i][0]['experience']} years
+# Education: {resumes[i][0]['education'][0] if resumes[i][0]['education'] else 'Unknown'}
+# Evaluation:
+# - Skill Match Score: {res['skill_match_score']:.4f}
+# - Experience Match Score: {res['experience_match_score']:.4f}
+# - Overall Match Score: {res['match_score']:.2f}
+# - Match Label: {res['match_label']}
+# Write a concise, professional response (100-250 words) evaluating the candidate’s fit, highlighting strengths, noting gaps, and suggesting next steps. Use a positive tone.
+#         """
+#             res['llm_response'] = call_deepseek_api(prompt)
         return {"results": results, "llm_response": llm_response}
 
     # Case 2: Resume evaluation (single or multiple)
@@ -389,20 +389,20 @@ Write a concise, professional response (100-250 words) evaluating the candidate�
     # Generate individual LLM responses for each resume
     for i, res in enumerate(results):
         job_posting = resumes[i][1] or default_job_posting
-        prompt = f"""
-You are a professional hiring manager reviewing a candidate for a {res['job_role']} position requiring {', '.join(job_posting.skills)}, {job_posting.experience} years of experience, and a {job_posting.education} degree. 
-Candidate: {res['candidate_name']}
-Skills: {', '.join(resumes[i][0]['skills'][:5])}
-Experience: {resumes[i][0]['experience']} years
-Education: {resumes[i][0]['education'][0] if resumes[i][0]['education'] else 'Unknown'}
-Evaluation:
-- Skill Match Score: {res['skill_match_score']:.4f}
-- Experience Match Score: {res['experience_match_score']:.4f}
-- Overall Match Score: {res['match_score']:.2f}
-- Match Label: {res['match_label']}
-Write a concise, professional response (100-250 words) evaluating the candidate’s fit, highlighting strengths, noting gaps, and suggesting next steps. Use a positive tone.
-        """
-        res['llm_response'] = call_deepseek_api(prompt)
+#         prompt = f"""
+# You are a professional hiring manager reviewing a candidate for a {res['job_role']} position requiring {', '.join(job_posting.skills)}, {job_posting.experience} years of experience, and a {job_posting.education} degree. 
+# Candidate: {res['candidate_name']}
+# Skills: {', '.join(resumes[i][0]['skills'][:5])}
+# Experience: {resumes[i][0]['experience']} years
+# Education: {resumes[i][0]['education'][0] if resumes[i][0]['education'] else 'Unknown'}
+# Evaluation:
+# - Skill Match Score: {res['skill_match_score']:.4f}
+# - Experience Match Score: {res['experience_match_score']:.4f}
+# - Overall Match Score: {res['match_score']:.2f}
+# - Match Label: {res['match_label']}
+# Write a concise, professional response (100-250 words) evaluating the candidate’s fit, highlighting strengths, noting gaps, and suggesting next steps. Use a positive tone.
+#         """
+#         res['llm_response'] = call_deepseek_api(prompt)
 
     # Generate summary LLM response
     if len(results) == 1:
