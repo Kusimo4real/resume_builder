@@ -6,7 +6,6 @@ import joblib
 import pandas as pd
 from pathlib import Path
 import re
-import requests
 from models import JobPosting, Resume, MatchResponse
 from openai import OpenAI
 from config import settings
@@ -205,7 +204,7 @@ def extract_number_of_jobs(text: str | None) -> int:
 
 
 
-def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free", max_tokens: int = None) -> str:
+def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free") -> str:
     deepseek_api_key = settings.deepseek_api_key_open_router
     if not deepseek_api_key:
         return "Error: DeepSeek API key not configured."
@@ -215,8 +214,6 @@ def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free", max
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
         }
-        if max_tokens:
-            payload["max_tokens"] = max_tokens
         response = client.chat.completions.create(**payload)
         return response.choices[0].message.content.strip()
     except Exception as e:
@@ -234,7 +231,7 @@ Determine if the following prompt is:
 Prompt: "{prompt}"
 Respond with only 'relevant', 'general', or 'out-of-scope'.
     """
-    response = call_deepseek_api(scope_prompt, max_tokens=10)
+    response = call_deepseek_api(scope_prompt)
     return response
 
 def process_single_resume(resume: Resume, job_posting: JobPosting) -> MatchResponse:
@@ -318,7 +315,8 @@ def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting]]], default_
                 job_posting = job_posting or default_job_posting
                 if job_posting:
                     context.append(f"Candidate: {resume['name']}, Role: {job_posting.job_role}, Skills: {', '.join(resume['skills'][:5])}, Experience: {resume['experience']} years")
-        
+                else:
+                    context.append(f"Candidate: {resume['name']}, Skills: {', '.join(resume['skills'][:5])}, Experience: {resume['experience']} years. No job posting provided.")
         # Handle prompt based on scope
         if scope == 'relevant':
             prompt = f"""
@@ -332,6 +330,7 @@ Respond in a professional, HR-focused manner.
 You are a friendly HR assistant specializing in recruitment and resume evaluation.
 Respond naturally and conversationally to the user's prompt, keeping a positive tone.
 You can engage in general chat but subtly steer toward HR-related topics when appropriate.
+{'Context: ' +  '; '.join(context) if context else ''}
 User prompt: {message_prompt}
             """
         else:  # out-of-scope
@@ -352,6 +351,24 @@ Example response: "I'm primarily an HR assistant focused on recruitment and resu
                 if job_posting:
                     match_response = process_single_resume(resume, job_posting)
                     results.append(match_response.__dict__)
+                    # get an llm response for each resume based on the job posting
+        
+        for i, res in enumerate(results):
+            job_posting = resumes[i][1] or default_job_posting
+            prompt = f"""
+You are a professional hiring manager reviewing a candidate for a {res['job_role']} position requiring {', '.join(job_posting.skills)}, {job_posting.experience} years of experience, and a {job_posting.education} degree. 
+Candidate: {res['candidate_name']}
+Skills: {', '.join(resumes[i][0]['skills'][:5])}
+Experience: {resumes[i][0]['experience']} years
+Education: {resumes[i][0]['education'][0] if resumes[i][0]['education'] else 'Unknown'}
+Evaluation:
+- Skill Match Score: {res['skill_match_score']:.4f}
+- Experience Match Score: {res['experience_match_score']:.4f}
+- Overall Match Score: {res['match_score']:.2f}
+- Match Label: {res['match_label']}
+Write a concise, professional response (100-250 words) evaluating the candidate’s fit, highlighting strengths, noting gaps, and suggesting next steps. Use a positive tone.
+        """
+            res['llm_response'] = call_deepseek_api(prompt)
         return {"results": results, "llm_response": llm_response}
 
     # Case 2: Resume evaluation (single or multiple)
@@ -405,3 +422,4 @@ Ranked by match score, summarize the candidates’ fit for their respective role
         llm_response = call_deepseek_api(prompt)
 
     return {"results": results, "llm_response": llm_response}
+
