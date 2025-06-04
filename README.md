@@ -31,15 +31,18 @@ This is a FastAPI-based backend that accepts CV files (PDF, DOCX, or TXT), extra
 ## 📦 Setup Instructions
 
 ### 1. Clone the Repository
+
 ```bash
 git clone https://github.com/Kusimo4real/resume_builder.git
 cd resume_builder
 ```
 
 ### 2. install dependencie
-```pip install -r requirements.txt```
+
+`pip install -r requirements.txt`
 
 ### 3. Run the API
+
 ```
-uvicorn main:app --reload
+uvicorn app.main:app --reload
 ```

@@ -1,13 +1,13 @@
 from email import errors
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from models import PDFRequest, JobPosting, ResumeInput
+from app.models import PDFRequest, JobPosting, ResumeInput
 from pypdf import PdfReader
-from exceptions import APIError, ValidationError, AuthenticationError, ProcessingError, ExternalServiceError, InternalServerError
+from app.exceptions import APIError, ValidationError, AuthenticationError, ProcessingError, ExternalServiceError, InternalServerError
 import base64
 import io
 import logging
-from utils import get_AI_feedback, parse_resume
+from app.utils import get_AI_feedback, parse_resume
 import traceback
 
 # Configure logging
@@ -65,8 +65,13 @@ async def predict_cv(request: PDFRequest):
             detail="At least one resume or a message prompt is required.",
             code="EMPTY_REQUEST"
         )
+        
     # Check job posting consistency
     has_default_job = request.job_posting is not None
+    
+    # This implementation originally checked for a job posting attached to each resume
+    # or a default job posting, but now we will only check for a single job posting for all resumes
+    # I am leaving the original logic in place for now, but it can be simplified later
     has_per_resume_jobs = any(resume_input.job_posting is not None for resume_input in request.resumes)
     
     if not has_default_job and not has_per_resume_jobs and not request.message_prompt:
@@ -124,7 +129,7 @@ async def predict_cv(request: PDFRequest):
                 )
 
             resume_data = parse_resume(text)
-            parsed_resumes.append((resume_data, resume_input.job_posting))
+            parsed_resumes.append((resume_data, resume_input.job_posting, resume_input.file_base64))
         except APIError as e:
             errors.append(e.to_dict())
             logger.error(f"Resume {i} processing failed: {e.detail}, Code: {e.code}, Context: {e.context}")

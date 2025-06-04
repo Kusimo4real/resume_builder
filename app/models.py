@@ -69,6 +69,7 @@ class MatchResponse(BaseModel):
     features_used: Dict
     contact_email: str
     contact_phone: str
+    file_base64: str
     llm_response: str
 
 class ResumeInput(BaseModel):

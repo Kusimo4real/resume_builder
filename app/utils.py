@@ -4,10 +4,10 @@ from fastapi import HTTPException
 import joblib
 from pathlib import Path
 import re
-from models import JobPosting, Resume, MatchResponse
+from app.models import JobPosting, Resume, MatchResponse
 from openai import OpenAI
-from config import settings
-from exceptions import APIError, ValidationError, ProcessingError, ExternalServiceError
+from app.config import settings
+from app.exceptions import APIError, ValidationError, ProcessingError, ExternalServiceError
 import httpx
 import time
 
@@ -256,7 +256,7 @@ Respond with only 'relevant', 'general', or 'out-of-scope'.
     response = call_deepseek_api(scope_prompt)
     return response
 
-def process_single_resume(resume: Resume, job_posting: JobPosting) -> MatchResponse:
+def process_single_resume(resume: Resume, job_posting: JobPosting, file_base64) -> MatchResponse:
     """Process a single resume against a job posting."""
     try:
         job_role = job_posting.job_role.strip()
@@ -348,6 +348,7 @@ def process_single_resume(resume: Resume, job_posting: JobPosting) -> MatchRespo
             features_used=features.to_dict(orient='records')[0],
             contact_email=resume["email"],
             contact_phone=resume["phone"],
+            file_base64=file_base64,
             llm_response=""
         )
     except APIError:
@@ -359,7 +360,7 @@ def process_single_resume(resume: Resume, job_posting: JobPosting) -> MatchRespo
         )
 
 
-def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting]]], default_job_posting: Optional[JobPosting] = None, message_prompt: Optional[str] = None) -> Dict:
+def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]], default_job_posting: Optional[JobPosting] = None, message_prompt: Optional[str] = None) -> Dict:
     """Generate AI feedback for single/multiple resumes or conversational prompts."""
     try:
         # Case 1: Custom prompt provided
@@ -369,7 +370,7 @@ def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting]]], default_
             # Build context if resumes are provided
             context = []
             if resumes and resumes[0][0]:
-                for resume, job_posting in resumes:
+                for resume, job_posting, _ in resumes:
                     job_posting = job_posting or default_job_posting
                     if job_posting:
                         context.append(f"Candidate: {resume['name']}, Role: {job_posting.job_role}, Skills: {', '.join(resume['skills'][:5])}, Experience: {resume['experience']} years")
@@ -404,10 +405,10 @@ def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting]]], default_
             llm_response = call_deepseek_api(prompt)
             results = []
             if resumes and resumes[0][0]:
-                for resume, job_posting in resumes:
+                for resume, job_posting, file_base64 in resumes:
                     job_posting = job_posting or default_job_posting
                     if job_posting:
-                        match_response = process_single_resume(resume, job_posting)
+                        match_response = process_single_resume(resume, job_posting, file_base64)
                         results.append(match_response.__dict__)
                         # get an llm response for each resume based on the job posting
             
@@ -438,10 +439,10 @@ def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting]]], default_
 
         # Process resumes
         results = []
-        for resume, job_posting in resumes:
+        for resume, job_posting, file_base64 in resumes:
             job_posting = job_posting or default_job_posting
             if job_posting:
-                match_response = process_single_resume(resume, job_posting)
+                match_response = process_single_resume(resume, job_posting, file_base64)
                 results.append(match_response.__dict__)
 
         # Rank resumes by match_score
