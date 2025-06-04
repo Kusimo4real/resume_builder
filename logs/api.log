@@ -1,0 +1,120 @@
+2025-06-04 09:58:12,104 [INFO] Received request with 0 resumes and message_prompt: True
+2025-06-04 09:58:14,403 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-04 09:58:23,781 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-04 11:37:52,827 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 11:37:52,827 [WARNING] Both default and per-resume job postings provided; prioritizing per-resume job postings
+2025-06-04 11:37:52,827 [WARNING] invalid pdf header: b'\n    '
+2025-06-04 11:37:52,827 [WARNING] EOF marker not found
+2025-06-04 11:37:52,828 [ERROR] Resume 1 processing failed: Failed to parse PDF: Stream has ended unexpectedly, Code: PDF_PARSING_ERROR, Context: {'resume_index': 1}
+2025-06-04 11:37:52,828 [ERROR] Error: ALL_RESUMES_FAILED - Failed to process all resumes, Context: {'error_count': 1}
+2025-06-04 11:37:53,051 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 11:37:53,051 [ERROR] Invalid API Key provided.
+2025-06-04 11:37:53,051 [ERROR] Error: INVALID_API_KEY - Invalid API key, Context: {}
+2025-06-04 11:37:53,202 [INFO] Received request with 0 resumes and message_prompt: False
+2025-06-04 11:37:53,202 [ERROR] Error: EMPTY_REQUEST - At least one resume or a message prompt is required., Context: {}
+2025-06-04 11:37:53,357 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 11:37:53,357 [ERROR] Error: VALIDATION_ERROR - A job posting or message prompt is required, Context: {}
+2025-06-04 11:37:53,531 [INFO] Received request with 0 resumes and message_prompt: True
+2025-06-04 11:37:53,532 [INFO] HTTP Request: POST http://testserver/cv/predict "HTTP/1.1 200 OK"
+2025-06-04 11:37:53,537 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 11:37:53,537 [ERROR] Resume 1 processing failed: Failed to parse PDF: Cannot read an empty file, Code: PDF_PARSING_ERROR, Context: {'resume_index': 1}
+2025-06-04 11:37:53,537 [ERROR] Error: ALL_RESUMES_FAILED - Failed to process all resumes, Context: {'error_count': 1}
+2025-06-04 11:37:53,699 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 11:37:53,699 [WARNING] invalid pdf header: b'\n    '
+2025-06-04 11:37:53,699 [WARNING] EOF marker not found
+2025-06-04 11:37:53,699 [ERROR] Resume 1 processing failed: Failed to parse PDF: Stream has ended unexpectedly, Code: PDF_PARSING_ERROR, Context: {'resume_index': 1}
+2025-06-04 11:37:53,700 [ERROR] Error: ALL_RESUMES_FAILED - Failed to process all resumes, Context: {'error_count': 1}
+2025-06-04 13:48:59,777 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 13:48:59,777 [WARNING] Both default and per-resume job postings provided; prioritizing per-resume job postings
+2025-06-04 13:48:59,777 [WARNING] invalid pdf header: b'\n    '
+2025-06-04 13:48:59,777 [WARNING] EOF marker not found
+2025-06-04 13:48:59,777 [ERROR] Resume 1 processing failed: Failed to parse PDF: Stream has ended unexpectedly, Code: PDF_PARSING_ERROR, Context: {'resume_index': 1}
+2025-06-04 13:48:59,778 [ERROR] Error: ALL_RESUMES_FAILED - Failed to process all resumes, Context: {'error_count': 1}
+2025-06-04 13:48:59,984 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 13:48:59,984 [ERROR] Invalid API Key provided.
+2025-06-04 13:48:59,984 [ERROR] Error: INVALID_API_KEY - Invalid API key, Context: {}
+2025-06-04 13:49:00,117 [INFO] Received request with 0 resumes and message_prompt: False
+2025-06-04 13:49:00,118 [ERROR] Error: EMPTY_REQUEST - At least one resume or a message prompt is required., Context: {}
+2025-06-04 13:49:00,268 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 13:49:00,268 [ERROR] Error: VALIDATION_ERROR - A job posting or message prompt is required, Context: {}
+2025-06-04 13:49:00,411 [INFO] Received request with 0 resumes and message_prompt: True
+2025-06-04 13:49:00,412 [INFO] HTTP Request: POST http://testserver/cv/predict "HTTP/1.1 200 OK"
+2025-06-04 13:49:00,418 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 13:49:00,418 [ERROR] Resume 1 processing failed: Failed to parse PDF: Cannot read an empty file, Code: PDF_PARSING_ERROR, Context: {'resume_index': 1}
+2025-06-04 13:49:00,418 [ERROR] Error: ALL_RESUMES_FAILED - Failed to process all resumes, Context: {'error_count': 1}
+2025-06-04 13:49:00,605 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 13:49:00,605 [WARNING] invalid pdf header: b'\n    '
+2025-06-04 13:49:00,605 [WARNING] EOF marker not found
+2025-06-04 13:49:00,605 [ERROR] Resume 1 processing failed: Failed to parse PDF: Stream has ended unexpectedly, Code: PDF_PARSING_ERROR, Context: {'resume_index': 1}
+2025-06-04 13:49:00,605 [ERROR] Error: ALL_RESUMES_FAILED - Failed to process all resumes, Context: {'error_count': 1}
+2025-06-04 13:57:37,432 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 13:57:37,433 [WARNING] Both default and per-resume job postings provided; prioritizing per-resume job postings
+2025-06-04 13:57:37,433 [WARNING] invalid pdf header: b'\n    '
+2025-06-04 13:57:37,433 [WARNING] EOF marker not found
+2025-06-04 13:57:37,433 [ERROR] Resume 1 processing failed: Failed to parse PDF: Stream has ended unexpectedly, Code: PDF_PARSING_ERROR, Context: {'resume_index': 1}
+2025-06-04 13:57:37,433 [ERROR] Error: ALL_RESUMES_FAILED - Failed to process all resumes, Context: {'error_count': 1}
+2025-06-04 13:57:37,663 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 13:57:37,664 [ERROR] Invalid API Key provided.
+2025-06-04 13:57:37,664 [ERROR] Error: INVALID_API_KEY - Invalid API key, Context: {}
+2025-06-04 13:57:37,789 [INFO] Received request with 0 resumes and message_prompt: False
+2025-06-04 13:57:37,789 [ERROR] Error: EMPTY_REQUEST - At least one resume or a message prompt is required., Context: {}
+2025-06-04 13:57:37,924 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 13:57:37,924 [ERROR] Error: VALIDATION_ERROR - A job posting or message prompt is required, Context: {}
+2025-06-04 13:57:38,069 [INFO] Received request with 0 resumes and message_prompt: True
+2025-06-04 13:57:38,070 [INFO] HTTP Request: POST http://testserver/cv/predict "HTTP/1.1 200 OK"
+2025-06-04 13:57:38,075 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 13:57:38,076 [ERROR] Resume 1 processing failed: Failed to parse PDF: Cannot read an empty file, Code: PDF_PARSING_ERROR, Context: {'resume_index': 1}
+2025-06-04 13:57:38,076 [ERROR] Error: ALL_RESUMES_FAILED - Failed to process all resumes, Context: {'error_count': 1}
+2025-06-04 13:57:38,270 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 13:57:38,270 [WARNING] invalid pdf header: b'\n    '
+2025-06-04 13:57:38,270 [WARNING] EOF marker not found
+2025-06-04 13:57:38,271 [ERROR] Resume 1 processing failed: Failed to parse PDF: Stream has ended unexpectedly, Code: PDF_PARSING_ERROR, Context: {'resume_index': 1}
+2025-06-04 13:57:38,271 [ERROR] Error: ALL_RESUMES_FAILED - Failed to process all resumes, Context: {'error_count': 1}
+2025-06-04 13:58:51,413 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 13:58:51,413 [WARNING] Both default and per-resume job postings provided; prioritizing per-resume job postings
+2025-06-04 13:58:51,413 [WARNING] invalid pdf header: b'\n    '
+2025-06-04 13:58:51,413 [WARNING] EOF marker not found
+2025-06-04 13:58:51,413 [ERROR] Resume 1 processing failed: Failed to parse PDF: Stream has ended unexpectedly, Code: PDF_PARSING_ERROR, Context: {'resume_index': 1}
+2025-06-04 13:58:51,413 [ERROR] Error: ALL_RESUMES_FAILED - Failed to process all resumes, Context: {'error_count': 1}
+2025-06-04 13:58:51,642 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 13:58:51,642 [ERROR] Invalid API Key provided.
+2025-06-04 13:58:51,642 [ERROR] Error: INVALID_API_KEY - Invalid API key, Context: {}
+2025-06-04 13:58:51,768 [INFO] Received request with 0 resumes and message_prompt: False
+2025-06-04 13:58:51,769 [ERROR] Error: EMPTY_REQUEST - At least one resume or a message prompt is required., Context: {}
+2025-06-04 13:58:51,922 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 13:58:51,922 [ERROR] Error: VALIDATION_ERROR - A job posting or message prompt is required, Context: {}
+2025-06-04 13:58:52,062 [INFO] Received request with 0 resumes and message_prompt: True
+2025-06-04 13:58:52,063 [INFO] HTTP Request: POST http://testserver/cv/predict "HTTP/1.1 200 OK"
+2025-06-04 13:58:52,068 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 13:58:52,068 [ERROR] Resume 1 processing failed: Failed to parse PDF: Cannot read an empty file, Code: PDF_PARSING_ERROR, Context: {'resume_index': 1}
+2025-06-04 13:58:52,068 [ERROR] Error: ALL_RESUMES_FAILED - Failed to process all resumes, Context: {'error_count': 1}
+2025-06-04 13:58:52,256 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-04 13:58:52,256 [WARNING] invalid pdf header: b'\n    '
+2025-06-04 13:58:52,256 [WARNING] EOF marker not found
+2025-06-04 13:58:52,257 [ERROR] Resume 1 processing failed: Failed to parse PDF: Stream has ended unexpectedly, Code: PDF_PARSING_ERROR, Context: {'resume_index': 1}
+2025-06-04 13:58:52,257 [ERROR] Error: ALL_RESUMES_FAILED - Failed to process all resumes, Context: {'error_count': 1}
+2025-06-04 14:32:15,952 [INFO] Received request with 3 resumes and message_prompt: True
+2025-06-04 14:32:16,109 [WARNING] incorrect startxref pointer(3)
+2025-06-04 14:32:16,111 [WARNING] parsing for Object Streams
+2025-06-04 14:32:18,218 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-04 14:32:24,374 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-04 14:33:43,787 [INFO] Received request with 3 resumes and message_prompt: False
+2025-06-04 14:33:43,999 [WARNING] incorrect startxref pointer(3)
+2025-06-04 14:33:44,000 [WARNING] parsing for Object Streams
+2025-06-04 14:33:46,138 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-04 15:14:55,760 [INFO] Received request with 3 resumes and message_prompt: False
+2025-06-04 15:14:55,905 [WARNING] incorrect startxref pointer(3)
+2025-06-04 15:14:55,906 [WARNING] parsing for Object Streams
+2025-06-04 15:14:56,116 [ERROR] Error: AI_FEEDBACK_ERROR - Error generating AI feedback: too many values to unpack (expected 2), Context: {}
+2025-06-04 15:22:11,908 [INFO] Received request with 3 resumes and message_prompt: False
+2025-06-04 15:22:12,077 [WARNING] incorrect startxref pointer(3)
+2025-06-04 15:22:12,078 [WARNING] parsing for Object Streams
+2025-06-04 15:22:12,284 [ERROR] Error: AI_FEEDBACK_ERROR - Error generating AI feedback: too many values to unpack (expected 2), Context: {}
+2025-06-04 15:25:01,283 [INFO] Received request with 3 resumes and message_prompt: False
+2025-06-04 15:25:01,437 [WARNING] incorrect startxref pointer(3)
+2025-06-04 15:25:01,438 [WARNING] parsing for Object Streams
+2025-06-04 15:25:01,623 [ERROR] Error: AI_FEEDBACK_ERROR - Error generating AI feedback: too many values to unpack (expected 2), Context: {}
+2025-06-04 15:26:09,560 [INFO] Received request with 3 resumes and message_prompt: False
+2025-06-04 15:26:09,714 [WARNING] incorrect startxref pointer(3)
+2025-06-04 15:26:09,715 [WARNING] parsing for Object Streams
+2025-06-04 15:26:13,461 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"

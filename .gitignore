@@ -10,6 +10,7 @@ env/
 .env
 
 test_json/
+test_scripts/
 
 
 api_key.txt
