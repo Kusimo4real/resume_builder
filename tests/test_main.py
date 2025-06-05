@@ -97,7 +97,7 @@ async def test_predict_cv_conversational_prompt(client, mock_deepseek_api):
     data = response.json()
     assert data["llm_response"] == mock_deepseek_api
     assert data["results"] == []
-    assert data["errors"] == []
+    assert "errors" not in data
 
 async def test_predict_cv_empty_pdf(client, valid_job_posting, mocker):
     """Test empty PDF."""
