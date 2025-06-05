@@ -1,14 +1,16 @@
 from email import errors
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from app.models import PDFRequest, JobPosting, ResumeInput
+from app.models import PDFRequest
 from pypdf import PdfReader
-from app.exceptions import APIError, ValidationError, AuthenticationError, ProcessingError, ExternalServiceError, InternalServerError
+from app.exceptions import APIError, ValidationError, AuthenticationError, ProcessingError, InternalServerError
 import base64
 import io
 import logging
 from app.utils import get_AI_feedback, parse_resume
 import traceback
+import time
+
 
 # Configure logging
 logging.basicConfig(
@@ -53,6 +55,7 @@ def read_root():
 
 @app.post("/cv/predict")
 async def predict_cv(request: PDFRequest):
+    start_time = time.time()
     logger.info(f"Received request with {len(request.resumes)} resumes and message_prompt: {request.message_prompt is not None}")    # Validate API Key
     if request.api_key != VALID_API_KEY:
         logger.error("Invalid API Key provided.")
@@ -152,7 +155,7 @@ async def predict_cv(request: PDFRequest):
 
     # Call get_AI_feedback
     try:
-        response = get_AI_feedback(
+        response = await get_AI_feedback(
             resumes=parsed_resumes,
             default_job_posting=request.job_posting,
             message_prompt=request.message_prompt
@@ -168,5 +171,6 @@ async def predict_cv(request: PDFRequest):
         raise e
     except Exception as e:
         raise InternalServerError(detail=f"Error processing request: {str(e)}")
+    logger.info(f"Request processed in {time.time() - start_time:.2f} seconds")
 
     return JSONResponse(content=response)

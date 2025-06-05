@@ -118,3 +118,78 @@
 2025-06-04 15:26:09,714 [WARNING] incorrect startxref pointer(3)
 2025-06-04 15:26:09,715 [WARNING] parsing for Object Streams
 2025-06-04 15:26:13,461 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-05 11:19:27,860 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-05 11:19:27,861 [WARNING] Both default and per-resume job postings provided; prioritizing per-resume job postings
+2025-06-05 11:19:27,861 [WARNING] invalid pdf header: b'\n    '
+2025-06-05 11:19:27,861 [WARNING] EOF marker not found
+2025-06-05 11:19:27,861 [ERROR] Resume 1 processing failed: Failed to parse PDF: Stream has ended unexpectedly, Code: PDF_PARSING_ERROR, Context: {'resume_index': 1}
+2025-06-05 11:19:27,861 [ERROR] Error: ALL_RESUMES_FAILED - Failed to process all resumes, Context: {'error_count': 1}
+2025-06-05 11:19:28,093 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-05 11:19:28,093 [ERROR] Invalid API Key provided.
+2025-06-05 11:19:28,093 [ERROR] Error: INVALID_API_KEY - Invalid API key, Context: {}
+2025-06-05 11:19:28,224 [INFO] Received request with 0 resumes and message_prompt: False
+2025-06-05 11:19:28,224 [ERROR] Error: EMPTY_REQUEST - At least one resume or a message prompt is required., Context: {}
+2025-06-05 11:19:28,362 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-05 11:19:28,363 [ERROR] Error: VALIDATION_ERROR - A job posting or message prompt is required, Context: {}
+2025-06-05 11:19:28,505 [INFO] Received request with 0 resumes and message_prompt: True
+2025-06-05 11:19:28,506 [INFO] HTTP Request: POST http://testserver/cv/predict "HTTP/1.1 200 OK"
+2025-06-05 11:19:28,509 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-05 11:19:28,510 [ERROR] Resume 1 processing failed: Failed to parse PDF: Cannot read an empty file, Code: PDF_PARSING_ERROR, Context: {'resume_index': 1}
+2025-06-05 11:19:28,510 [ERROR] Error: ALL_RESUMES_FAILED - Failed to process all resumes, Context: {'error_count': 1}
+2025-06-05 11:19:28,706 [INFO] Received request with 1 resumes and message_prompt: False
+2025-06-05 11:19:28,707 [WARNING] invalid pdf header: b'\n    '
+2025-06-05 11:19:28,707 [WARNING] EOF marker not found
+2025-06-05 11:19:28,707 [ERROR] Resume 1 processing failed: Failed to parse PDF: Stream has ended unexpectedly, Code: PDF_PARSING_ERROR, Context: {'resume_index': 1}
+2025-06-05 11:19:28,707 [ERROR] Error: ALL_RESUMES_FAILED - Failed to process all resumes, Context: {'error_count': 1}
+2025-06-05 13:56:24,424 [INFO] Received request with 3 resumes and message_prompt: True
+2025-06-05 13:56:24,525 [WARNING] incorrect startxref pointer(3)
+2025-06-05 13:56:24,526 [WARNING] parsing for Object Streams
+2025-06-05 13:56:26,640 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-05 13:56:33,315 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-05 13:56:53,982 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-05 13:57:03,023 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-05 13:57:16,374 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-05 15:40:53,295 [INFO] Received request with 3 resumes and message_prompt: False
+2025-06-05 15:40:53,388 [WARNING] incorrect startxref pointer(3)
+2025-06-05 15:40:53,388 [WARNING] parsing for Object Streams
+2025-06-05 15:40:54,598 [INFO] Loaded model and scaler for Software Engineer
+2025-06-05 15:40:54,619 [INFO] Processed resume for IMOLEAYO MOSES in 1.11 seconds
+2025-06-05 15:40:54,621 [INFO] Processed resume for ABDULSEMIU KUSIMO OLUWASEYI in 0.00 seconds
+2025-06-05 15:40:54,624 [INFO] Processed resume for Innocent Orih in 0.00 seconds
+2025-06-05 15:40:56,342 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-05 15:40:56,613 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-05 15:40:57,127 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-05 15:41:07,252 [INFO] DeepSeek API call took 12.53 seconds
+2025-06-05 15:41:07,252 [INFO] Generated LLM response for Innocent Orih in 12.55 seconds
+2025-06-05 15:41:12,883 [INFO] DeepSeek API call took 18.20 seconds
+2025-06-05 15:41:12,883 [INFO] Generated LLM response for IMOLEAYO MOSES in 18.26 seconds
+2025-06-05 15:41:35,121 [INFO] DeepSeek API call took 40.42 seconds
+2025-06-05 15:41:35,121 [INFO] Generated LLM response for ABDULSEMIU KUSIMO OLUWASEYI in 40.44 seconds
+2025-06-05 15:41:36,632 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-05 15:42:04,202 [INFO] DeepSeek API call took 29.06 seconds
+2025-06-05 15:42:04,202 [INFO] Request processed in 70.91 seconds
+2025-06-05 15:58:44,952 [INFO] Received request with 3 resumes and message_prompt: False
+2025-06-05 15:58:45,035 [WARNING] incorrect startxref pointer(3)
+2025-06-05 15:58:45,036 [WARNING] parsing for Object Streams
+2025-06-05 15:58:46,070 [INFO] Loaded model and scaler for Software Engineer
+2025-06-05 15:58:46,081 [INFO] Processed resume for IMOLEAYO MOSES in 0.95 seconds
+2025-06-05 15:58:46,084 [INFO] Processed resume for ABDULSEMIU KUSIMO OLUWASEYI in 0.00 seconds
+2025-06-05 15:58:46,086 [INFO] Processed resume for Innocent Orih in 0.00 seconds
+2025-06-05 15:58:48,098 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-05 15:58:48,333 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-05 15:58:48,509 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-05 15:58:56,792 [INFO] DeepSeek API call took 10.62 seconds
+2025-06-05 15:58:56,792 [INFO] Generated LLM response for Innocent Orih in 10.64 seconds
+2025-06-05 15:58:59,222 [INFO] DeepSeek API call took 13.07 seconds
+2025-06-05 15:58:59,222 [INFO] Generated LLM response for ABDULSEMIU KUSIMO OLUWASEYI in 13.09 seconds
+2025-06-05 15:58:59,545 [INFO] DeepSeek API call took 13.42 seconds
+2025-06-05 15:58:59,546 [INFO] Generated LLM response for IMOLEAYO MOSES in 13.46 seconds
+2025-06-05 15:58:59,546 [INFO] Request processed in 14.59 seconds
+2025-06-05 15:59:52,907 [INFO] Received request with 0 resumes and message_prompt: True
+2025-06-05 15:59:52,907 [ERROR] Error: INTERNAL_SERVER_ERROR - Error generating AI feedback: asyncio.run() cannot be called from a running event loop, Context: {}
+2025-06-05 16:00:39,465 [INFO] Received request with 0 resumes and message_prompt: True
+2025-06-05 16:00:39,465 [ERROR] Error: INTERNAL_SERVER_ERROR - Error generating AI feedback: asyncio.run() cannot be called from a running event loop, Context: {}
+2025-06-05 16:05:43,570 [INFO] Received request with 0 resumes and message_prompt: True
+2025-06-05 16:05:45,497 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-05 16:05:51,640 [INFO] DeepSeek API call took 8.04 seconds
+2025-06-05 16:05:51,642 [INFO] Request processed in 8.07 seconds

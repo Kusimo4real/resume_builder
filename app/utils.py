@@ -7,10 +7,11 @@ import re
 from app.models import JobPosting, Resume, MatchResponse
 from openai import OpenAI
 from app.config import settings
-from app.exceptions import APIError, ValidationError, ProcessingError, ExternalServiceError
+from app.exceptions import APIError, ValidationError, ProcessingError, ExternalServiceError, InternalServerError
 import httpx
 import time
-
+import logging
+import asyncio
 
 
 """
@@ -24,6 +25,21 @@ This module contains utility functions for data processing and model evaluation.
     - `process_pdf`: Processes a PDF file to extract structured information including total experience, skills, LinkedIn presence, and degree level.
     - `extract_text_from_pdf`: Extracts text from a PDF file using PyPDF2.    
 """
+
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("logs/api.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Cache for ML models and scalers
+_model_cache: Dict[str, Tuple[object, object]] = {}
 
 
 #Extract experience
@@ -206,8 +222,43 @@ def extract_number_of_jobs(text: Optional[str]) -> int:
         )
 
 
-def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free", max_retries: int = 3) -> str:
-    """Call DeepSeek API with retries and timeout."""
+# def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free", max_retries: int = 3) -> str:
+#     """Call DeepSeek API with retries and timeout."""
+#     deepseek_api_key = settings.deepseek_api_key_open_router
+#     if not deepseek_api_key:
+#         raise ExternalServiceError(
+#             detail="DeepSeek API key not configured",
+#             code="MISSING_API_KEY"
+#         )
+    
+#     client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=deepseek_api_key)
+#     payload = {
+#         "model": model,
+#         "messages": [{"role": "user", "content": prompt}],
+#     }
+    
+#     for attempt in range(1, max_retries + 1):
+#         try:
+#             with httpx.Client(timeout=30.0) as client:
+#                 response = client.post(
+#                     url="https://openrouter.ai/api/v1/chat/completions",
+#                     headers={"Authorization": f"Bearer {deepseek_api_key}"},
+#                     json=payload
+#                 )
+#                 response.raise_for_status()
+#                 return response.json()["choices"][0]["message"]["content"].strip()
+#         except (httpx.RequestError, httpx.HTTPStatusError) as e:
+#             if attempt == max_retries:
+#                 raise ExternalServiceError(
+#                     detail=f"Failed to call DeepSeek API after {max_retries} attempts: {str(e)}",
+#                     code="DEEPSEEK_API_FAILURE",
+#                     context={"attempts": max_retries}
+#                 )
+#             time.sleep(2 ** attempt)  # Exponential backoff
+#     return ""  # Should never reach here
+
+async def call_deepseek_api_async(prompt: str, model: str = "deepseek/deepseek-r1:free", max_retries: int = 2) -> str:
+    """Call DeepSeek API asynchronously with retries and timeout."""
     deepseek_api_key = settings.deepseek_api_key_open_router
     if not deepseek_api_key:
         raise ExternalServiceError(
@@ -215,31 +266,35 @@ def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free", max
             code="MISSING_API_KEY"
         )
     
-    client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=deepseek_api_key)
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    
-    for attempt in range(1, max_retries + 1):
-        try:
-            with httpx.Client(timeout=30.0) as client:
-                response = client.post(
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        for attempt in range(1, max_retries + 1):
+            try:
+                start_time = time.time()
+                response = await client.post(
                     url="https://openrouter.ai/api/v1/chat/completions",
                     headers={"Authorization": f"Bearer {deepseek_api_key}"},
                     json=payload
                 )
                 response.raise_for_status()
+                logger.info(f"DeepSeek API call took {time.time() - start_time:.2f} seconds")
                 return response.json()["choices"][0]["message"]["content"].strip()
-        except (httpx.RequestError, httpx.HTTPStatusError) as e:
-            if attempt == max_retries:
-                raise ExternalServiceError(
-                    detail=f"Failed to call DeepSeek API after {max_retries} attempts: {str(e)}",
-                    code="DEEPSEEK_API_FAILURE",
-                    context={"attempts": max_retries}
-                )
-            time.sleep(2 ** attempt)  # Exponential backoff
-    return ""  # Should never reach here
+            except (httpx.RequestError, httpx.HTTPStatusError) as e:
+                if attempt == max_retries:
+                    raise ExternalServiceError(
+                        detail=f"Failed to call DeepSeek API after {max_retries} attempts: {str(e)}",
+                        code="DEEPSEEK_API_FAILURE",
+                        context={"attempts": max_retries}
+                    )
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+    return ""
+
+def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free", max_retries: int = 2) -> str:
+    """Synchronous wrapper for DeepSeek API call."""
+    return asyncio.run(call_deepseek_api_async(prompt, model, max_retries))
 
 
 def assess_prompt_scope(prompt: str) -> str:
@@ -253,12 +308,13 @@ Determine if the following prompt is:
 Prompt: "{prompt}"
 Respond with only 'relevant', 'general', or 'out-of-scope'.
     """
-    response = call_deepseek_api(scope_prompt)
+    response = call_deepseek_api_async(scope_prompt)
     return response
 
-def process_single_resume(resume: Resume, job_posting: JobPosting, file_base64) -> MatchResponse:
-    """Process a single resume against a job posting."""
+async def process_single_resume_async(resume: Resume, job_posting: JobPosting, file_base64: str) -> MatchResponse:
+    """Process a single resume asynchronously against a job posting."""
     try:
+        start_time = time.time()
         job_role = job_posting.job_role.strip()
         required_skills = job_posting.skills
         required_years = job_posting.experience
@@ -276,18 +332,23 @@ def process_single_resume(resume: Resume, job_posting: JobPosting, file_base64) 
                 code="INVALID_EXPERIENCE"
             )
 
-        # Load model and scaler
-        model_path = Path(f"models/resume_match_model_{job_role.replace(' ', '_')}.pkl")
-        scaler_path = Path(f"models/scaler_{job_role.replace(' ', '_')}.pkl")
-        try:
-            model = joblib.load(model_path)
-            scaler = joblib.load(scaler_path)
-        except FileNotFoundError:
-            raise ProcessingError(
-                detail=f"Model or scaler for job role '{job_role}' not found",
-                code="MODEL_NOT_FOUND",
-                status_code=404
-            )
+        # Load model and scaler from cache or disk
+        cache_key = job_role.replace(' ', '_')
+        if cache_key not in _model_cache:
+            model_path = Path(f"models/resume_match_model_{cache_key}.pkl")
+            scaler_path = Path(f"models/scaler_{cache_key}.pkl")
+            try:
+                model = joblib.load(model_path)
+                scaler = joblib.load(scaler_path)
+                _model_cache[cache_key] = (model, scaler)
+                logger.info(f"Loaded model and scaler for {job_role}")
+            except FileNotFoundError:
+                raise ProcessingError(
+                    detail=f"Model or scaler for job role '{job_role}' not found",
+                    code="MODEL_NOT_FOUND",
+                    status_code=404
+                )
+        model, scaler = _model_cache[cache_key]
 
         # Compute scores
         skill_match_score = compute_skill_match(resume["skills"], required_skills)
@@ -337,7 +398,7 @@ def process_single_resume(resume: Resume, job_posting: JobPosting, file_base64) 
                 code="MODEL_PREDICTION_ERROR"
             )
 
-        return MatchResponse(
+        result = MatchResponse(
             job_role=job_role,
             candidate_name=resume["name"],
             match_label=match_label,
@@ -351,6 +412,8 @@ def process_single_resume(resume: Resume, job_posting: JobPosting, file_base64) 
             file_base64=file_base64,
             llm_response=""
         )
+        logger.info(f"Processed resume for {resume['name']} in {time.time() - start_time:.2f} seconds")
+        return result
     except APIError:
         raise
     except Exception as e:
@@ -360,7 +423,30 @@ def process_single_resume(resume: Resume, job_posting: JobPosting, file_base64) 
         )
 
 
-def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]], default_job_posting: Optional[JobPosting] = None, message_prompt: Optional[str] = None) -> Dict:
+
+async def get_llm_response_for_resume(resume: Resume, job_posting: JobPosting, match_response: Dict) -> str:
+    """Generate LLM response for a single resume."""
+    start_time = time.time()
+    prompt = f"""
+    You are a professional hiring manager reviewing a candidate for a {match_response['job_role']} position requiring {', '.join(job_posting.skills)}, {job_posting.experience} years of experience, and a {job_posting.education} degree.
+    Candidate: {match_response['candidate_name']}
+    Skills: {', '.join(resume['skills'][:5])}
+    Experience: {resume['experience']} years
+    Education: {resume['education'][0] if resume['education'] else 'Unknown'}
+    Evaluation:
+    - Skill Match Score: {match_response['skill_match_score']:.4f}
+    - Experience Match Score: {match_response['experience_match_score']:.4f}
+    - Overall Match Score: {match_response['match_score']:.2f}
+    - Match Label: {match_response['match_label']}
+    Write a concise, professional response (100-250 words) evaluating the candidate’s fit, highlighting strengths, noting gaps, and suggesting next steps. Use a positive tone.
+    """
+    response = await call_deepseek_api_async(prompt)
+    logger.info(f"Generated LLM response for {resume['name']} in {time.time() - start_time:.2f} seconds")
+    return response
+
+
+
+async def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]], default_job_posting: Optional[JobPosting] = None, message_prompt: Optional[str] = None) -> Dict:
     """Generate AI feedback for single/multiple resumes or conversational prompts."""
     try:
         # Case 1: Custom prompt provided
@@ -402,92 +488,104 @@ def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]], def
     Example response: "I'm primarily an HR assistant focused on recruitment and resume evaluation. I can help with that or chat a bit, but let's keep it relevant!"
                 """
             
-            llm_response = call_deepseek_api(prompt)
+            llm_response = await call_deepseek_api_async(prompt)
             results = []
             if resumes and resumes[0][0]:
-                for resume, job_posting, file_base64 in resumes:
-                    job_posting = job_posting or default_job_posting
-                    if job_posting:
-                        match_response = process_single_resume(resume, job_posting, file_base64)
-                        results.append(match_response.__dict__)
-                        # get an llm response for each resume based on the job posting
+            # Process resumes concurrently
+                results_tasks = [
+                    process_single_resume_async(resume, job_posting or default_job_posting, file_base64)
+                    for resume, job_posting, file_base64 in resumes if job_posting or default_job_posting
+                ]
+                results = await asyncio.gather(*results_tasks, return_exceptions=True)
+                results = [r.__dict__ for r in results if not isinstance(r, Exception)]
             
-    #         for i, res in enumerate(results):
-    #             job_posting = resumes[i][1] or default_job_posting
-    #             prompt = f"""
-    # You are a professional hiring manager reviewing a candidate for a {res['job_role']} position requiring {', '.join(job_posting.skills)}, {job_posting.experience} years of experience, and a {job_posting.education} degree. 
-    # Candidate: {res['candidate_name']}
-    # Skills: {', '.join(resumes[i][0]['skills'][:5])}
-    # Experience: {resumes[i][0]['experience']} years
-    # Education: {resumes[i][0]['education'][0] if resumes[i][0]['education'] else 'Unknown'}
-    # Evaluation:
-    # - Skill Match Score: {res['skill_match_score']:.4f}
-    # - Experience Match Score: {res['experience_match_score']:.4f}
-    # - Overall Match Score: {res['match_score']:.2f}
-    # - Match Label: {res['match_label']}
-    # Write a concise, professional response (100-250 words) evaluating the candidate’s fit, highlighting strengths, noting gaps, and suggesting next steps. Use a positive tone.
-    #         """
-    #             res['llm_response'] = call_deepseek_api(prompt)
-            return {"results": results, "llm_response": llm_response}
-
-        # Case 2: Resume evaluation (single or multiple)
+            # logger.info(f"Processed prompt with {len(results)} resumes in {time.time() - start_time:.2f} seconds")
+            return {"results": results, "llm_response": llm_response, "errors": []}
+        # Case 2: Resume evaluation
         if not resumes or not (resumes[0][1] or default_job_posting):
             raise ValidationError(
                 detail="At least one resume and a job posting are required for evaluation",
                 code="MISSING_RESUME_OR_JOB"
             )
 
-        # Process resumes
-        results = []
-        for resume, job_posting, file_base64 in resumes:
-            job_posting = job_posting or default_job_posting
-            if job_posting:
-                match_response = process_single_resume(resume, job_posting, file_base64)
-                results.append(match_response.__dict__)
+        # Process resumes concurrently
+        results_tasks = [
+            process_single_resume_async(resume, job_posting or default_job_posting, file_base64)
+            for resume, job_posting, file_base64 in resumes
+        ]
+        results = await asyncio.gather(*results_tasks, return_exceptions=True)
+        
+        # Handle errors and collect successful results
+        errors = []
+        valid_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                error_dict = {
+                    "detail": str(result),
+                    "code": getattr(result, "code", "RESUME_PROCESSING_ERROR"),
+                    "context": {"resume_index": i + 1}
+                }
+                errors.append(error_dict)
+                logger.error(f"Resume {i + 1} failed: {error_dict}")
+            else:
+                valid_results.append(result.__dict__)
+
+        if not valid_results:
+            raise ProcessingError(
+                detail="Failed to process all resumes",
+                code="ALL_RESUMES_FAILED",
+                status_code=400,
+                context={"error_count": len(errors)}
+            )
+
+        # Generate individual LLM responses concurrently
+        llm_tasks = [
+            get_llm_response_for_resume(resumes[i][0], resumes[i][1] or default_job_posting, result)
+            for i, result in enumerate(valid_results)
+        ]
+        llm_responses = await asyncio.gather(*llm_tasks, return_exceptions=True)
+        
+        for i, llm_response in enumerate(llm_responses):
+            if isinstance(llm_response, Exception):
+                logger.error(f"LLM response for resume {i + 1} failed: {str(llm_response)}")
+                valid_results[i]['llm_response'] = f"Error generating LLM response: {str(llm_response)}"
+            else:
+                valid_results[i]['llm_response'] = llm_response
 
         # Rank resumes by match_score
-        results = sorted(results, key=lambda x: x['match_score'], reverse=True)
+        valid_results = sorted(valid_results, key=lambda x: x['match_score'], reverse=True)
 
-        # Generate individual LLM responses for each resume
-        for i, res in enumerate(results):
-            job_posting = resumes[i][1] or default_job_posting
-    #         prompt = f"""
-    # You are a professional hiring manager reviewing a candidate for a {res['job_role']} position requiring {', '.join(job_posting.skills)}, {job_posting.experience} years of experience, and a {job_posting.education} degree. 
-    # Candidate: {res['candidate_name']}
-    # Skills: {', '.join(resumes[i][0]['skills'][:5])}
-    # Experience: {resumes[i][0]['experience']} years
-    # Education: {resumes[i][0]['education'][0] if resumes[i][0]['education'] else 'Unknown'}
-    # Evaluation:
-    # - Skill Match Score: {res['skill_match_score']:.4f}
-    # - Experience Match Score: {res['experience_match_score']:.4f}
-    # - Overall Match Score: {res['match_score']:.2f}
-    # - Match Label: {res['match_label']}
-    # Write a concise, professional response (100-250 words) evaluating the candidate’s fit, highlighting strengths, noting gaps, and suggesting next steps. Use a positive tone.
-    #         """
-    #         res['llm_response'] = call_deepseek_api(prompt)
+        # For now the overall LLM response is not generated, but can be uncommented if needed
+        # Generate overall LLM response
+        # if len(valid_results) == 1:
+        #     llm_response = valid_results[0]['llm_response']
+        # else:
+        #     context = []
+        #     for i, res in enumerate(valid_results, 1):
+        #         job_role = res['job_role']
+        #         context.append(f"Candidate {i}: {res['candidate_name']} for {job_role}, Match Score: {res['match_score']:.2f}, Skills: {', '.join(resumes[i-1][0]['skills'][:5])}, Experience: {resumes[i-1][0]['experience']} years")
+        #     prompt = f"""
+        #     You are a professional hiring manager reviewing multiple candidates.
+        #     Context: {'; '.join(context)}.
+        #     Ranked by match score, summarize the candidates’ fit for their respective roles (or shared role if applicable). Highlight top candidates’ strengths, note any common gaps, and suggest next steps (e.g., interviews, training). Keep the response comprehensive and professional.
+        #     """
+        #     llm_response = await call_deepseek_api_async(prompt)
 
-        # Generate summary LLM response
-        if len(results) == 1:
-            # For single resume, use the individual response as the summary
-            llm_response = results[0]['llm_response']
-        else:
-            # For multiple resumes, generate a summary
-            context = []
-            for i, res in enumerate(results, 1):
-                job_role = res['job_role']
-                context.append(f"Candidate {i}: {res['candidate_name']} for {job_role}, Match Score: {res['match_score']:.2f}, Skills: {', '.join(resumes[i-1][0]['skills'][:5])}, Experience: {resumes[i-1][0]['experience']} years")
-            prompt = f"""
-    You are a professional hiring manager reviewing multiple candidates. 
-    Context: {'; '.join(context)}.
-    Ranked by match score, summarize the candidates’ fit for their respective roles (or shared role if applicable). Highlight top candidates’ strengths, note any common gaps, and suggest next steps (e.g., interviews, training). Keep the response comprehensive and professional.
-            """
-            llm_response = call_deepseek_api(prompt)
-
-        return {"results": results, "llm_response": llm_response}
+        # response = {
+        #     "results": valid_results,
+        #     "llm_response": llm_response,
+        #     "errors": errors,
+        #     "context": {"processed": len(valid_results), "failed": len(errors)}
+        # }
+        response = {
+            "results": valid_results,
+            "llm_response": "",
+            "errors": errors,
+            "context": {"processed": len(valid_results), "failed": len(errors)}
+        }
+        # logger.info(f"Completed AI feedback for {len(resumes)} resumes in {time.time() - start_time:.2f} seconds")
+        return response
     except APIError:
         raise
     except Exception as e:
-        raise ProcessingError(
-            detail=f"Error generating AI feedback: {str(e)}",
-            code="AI_FEEDBACK_ERROR"
-        )
+        raise InternalServerError(detail=f"Error generating AI feedback: {str(e)}")
