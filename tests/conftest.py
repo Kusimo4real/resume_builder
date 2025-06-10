@@ -2,7 +2,7 @@ import pytest
 import base64
 from fastapi.testclient import TestClient
 from app.main import app
-from app.models import JobPosting, Resume, PDFRequest, ResumeInput
+from app.schemas import JobPosting, Resume, PDFRequest, ResumeInput
 from app.utils import call_deepseek_api, process_single_resume
 from unittest.mock import patch, MagicMock
 import pandas as pd

@@ -1,7 +1,7 @@
 from email import errors
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from app.models import PDFRequest
+from app.schemas import PDFRequest
 from pypdf import PdfReader
 from app.exceptions import APIError, ValidationError, AuthenticationError, ProcessingError, InternalServerError
 import base64

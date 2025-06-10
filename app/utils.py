@@ -4,7 +4,7 @@ from fastapi import HTTPException
 import joblib
 from pathlib import Path
 import re
-from app.models import JobPosting, Resume, MatchResponse
+from app.schemas import JobPosting, Resume, MatchResponse
 from openai import OpenAI
 from app.config import settings
 from app.exceptions import APIError, ValidationError, ProcessingError, ExternalServiceError, InternalServerError
@@ -498,6 +498,19 @@ async def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]
                 ]
                 results = await asyncio.gather(*results_tasks, return_exceptions=True)
                 results = [r.__dict__ for r in results if not isinstance(r, Exception)]
+                
+                # get llm responses for each resume
+                llm_tasks = [
+                    get_llm_response_for_resume(resumes[i][0], resumes[i][1] or default_job_posting, results[i])
+                    for i in range(len(results))
+                ]
+                llm_responses = await asyncio.gather(*llm_tasks, return_exceptions=True)
+                for i, llm_response in enumerate(llm_responses):
+                    if isinstance(llm_response, Exception):
+                        logger.error(f"LLM response for resume {i + 1} failed: {str(llm_response)}")
+                        results[i]['llm_response'] = f"Error generating LLM response: {str(llm_response)}"
+                    else:
+                        results[i]['llm_response'] = llm_response
             
             # logger.info(f"Processed prompt with {len(results)} resumes in {time.time() - start_time:.2f} seconds")
             return {"results": results, "llm_response": llm_response, "errors": []}

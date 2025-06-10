@@ -193,3 +193,22 @@
 2025-06-05 16:05:45,497 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
 2025-06-05 16:05:51,640 [INFO] DeepSeek API call took 8.04 seconds
 2025-06-05 16:05:51,642 [INFO] Request processed in 8.07 seconds
+2025-06-10 09:40:25,401 [INFO] Received request with 3 resumes and message_prompt: True
+2025-06-10 09:40:25,555 [WARNING] incorrect startxref pointer(3)
+2025-06-10 09:40:25,556 [WARNING] parsing for Object Streams
+2025-06-10 09:40:35,509 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-10 09:40:50,149 [INFO] DeepSeek API call took 16.83 seconds
+2025-06-10 09:40:51,918 [INFO] Loaded model and scaler for Software Engineer
+2025-06-10 09:40:51,932 [INFO] Processed resume for IMOLEAYO MOSES in 1.78 seconds
+2025-06-10 09:40:51,936 [INFO] Processed resume for ABDULSEMIU KUSIMO OLUWASEYI in 0.00 seconds
+2025-06-10 09:40:51,939 [INFO] Processed resume for Innocent Orih in 0.00 seconds
+2025-06-10 09:40:54,034 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-10 09:40:54,446 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-10 09:40:54,651 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2025-06-10 09:41:06,633 [INFO] DeepSeek API call took 14.64 seconds
+2025-06-10 09:41:06,633 [INFO] Generated LLM response for ABDULSEMIU KUSIMO OLUWASEYI in 14.67 seconds
+2025-06-10 09:41:08,886 [INFO] DeepSeek API call took 16.86 seconds
+2025-06-10 09:41:08,887 [INFO] Generated LLM response for Innocent Orih in 16.89 seconds
+2025-06-10 09:41:13,533 [INFO] DeepSeek API call took 21.57 seconds
+2025-06-10 09:41:13,533 [INFO] Generated LLM response for IMOLEAYO MOSES in 21.59 seconds
+2025-06-10 09:41:13,540 [INFO] Request processed in 48.14 seconds

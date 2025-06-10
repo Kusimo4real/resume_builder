@@ -5,7 +5,7 @@ from app.utils import (
     compute_skill_match, compute_experience_match, compute_match_score, match_score_to_label,
     process_single_resume, get_AI_feedback
 )
-from app.models import Resume, JobPosting
+from app.schemas  import Resume, JobPosting
 from app.exceptions import ValidationError, ProcessingError
 from unittest.mock import patch
 
