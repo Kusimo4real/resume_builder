@@ -297,7 +297,7 @@ def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free", max
     return asyncio.run(call_deepseek_api_async(prompt, model, max_retries))
 
 
-def assess_prompt_scope(prompt: str) -> str:
+async def assess_prompt_scope(prompt: str) -> str:
     """Assess if a prompt is HR-relevant, general conversation, or out-of-scope."""
     scope_prompt = f"""
 You are an HR assistant specializing in recruitment and resume evaluation.
@@ -308,7 +308,7 @@ Determine if the following prompt is:
 Prompt: "{prompt}"
 Respond with only 'relevant', 'general', or 'out-of-scope'.
     """
-    response = call_deepseek_api_async(scope_prompt)
+    response = await call_deepseek_api_async(scope_prompt)
     return response
 
 async def process_single_resume_async(resume: Resume, job_posting: JobPosting, file_base64: str) -> MatchResponse:
@@ -449,9 +449,10 @@ async def get_llm_response_for_resume(resume: Resume, job_posting: JobPosting, m
 async def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]], default_job_posting: Optional[JobPosting] = None, message_prompt: Optional[str] = None) -> Dict:
     """Generate AI feedback for single/multiple resumes or conversational prompts."""
     try:
+        start_time = time.time()
         # Case 1: Custom prompt provided
         if message_prompt:
-            scope = assess_prompt_scope(message_prompt)
+            # scope = await assess_prompt_scope(message_prompt)
             
             # Build context if resumes are provided
             context = []
@@ -462,33 +463,64 @@ async def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]
                         context.append(f"Candidate: {resume['name']}, Role: {job_posting.job_role}, Skills: {', '.join(resume['skills'][:5])}, Experience: {resume['experience']} years")
                     else:
                         context.append(f"Candidate: {resume['name']}, Skills: {', '.join(resume['skills'][:5])}, Experience: {resume['experience']} years. No job posting provided.")
-            # Handle prompt based on scope
-            if scope == 'relevant':
-                prompt = f"""
-    You are a professional HR assistant specializing in recruitment and resume evaluation.
-    Context: {'; '.join(context) if context else 'No resume/job context provided.'}
-    User prompt: {message_prompt}
-    Respond in a professional, HR-focused manner.
-                """
-            elif scope == 'general':
-                prompt = f"""
-    You are a friendly HR assistant specializing in recruitment and resume evaluation.
-    Respond naturally and conversationally to the user's prompt, keeping a positive tone.
-    You can engage in general chat but subtly steer toward HR-related topics when appropriate.
-    {'Context: ' +  '; '.join(context) if context else ''}
-    User prompt: {message_prompt}
-                """
-            else:  # out-of-scope
-                prompt = f"""
-    You are an HR assistant specializing in recruitment and resume evaluation.
-    The user's prompt seems unrelated to HR tasks.
-    Respond politely, explaining you're primarily an HR assistant, and suggest returning to HR topics.
-    Keep the tone positive and professional.
-    User prompt: {message_prompt}
-    Example response: "I'm primarily an HR assistant focused on recruitment and resume evaluation. I can help with that or chat a bit, but let's keep it relevant!"
-                """
-            
-            llm_response = await call_deepseek_api_async(prompt)
+    #         # Handle prompt based on scope
+    #         if scope == 'relevant':
+    #             prompt = f"""
+    # You are a professional HR assistant specializing in recruitment and resume evaluation.
+    # Context: {'; '.join(context) if context else 'No resume/job context provided.'}
+    # User prompt: {message_prompt}
+    # Respond in a professional, HR-focused manner.
+    #             """
+    #         elif scope == 'general':
+    #             prompt = f"""
+    # You are a friendly HR assistant specializing in recruitment and resume evaluation.
+    # Respond naturally and conversationally to the user's prompt, keeping a positive tone.
+    # You can engage in general chat but subtly steer toward HR-related topics when appropriate.
+    # {'Context: ' +  '; '.join(context) if context else ''}
+    # User prompt: {message_prompt}
+    #             """
+    #         else:  # out-of-scope
+    #             prompt = f"""
+    # You are an HR assistant specializing in recruitment and resume evaluation.
+    # The user's prompt seems unrelated to HR tasks.
+    # Respond politely, explaining you're primarily an HR assistant, and suggest returning to HR topics.
+    # Keep the tone positive and professional.
+    # User prompt: {message_prompt}
+    # Example response: "I'm primarily an HR assistant focused on recruitment and resume evaluation. I can help with that or chat a bit, but let's keep it relevant!"
+    #             """
+
+            prompt = f"""
+You are a highly skilled HR assistant specializing in recruitment and resume evaluation.
+
+**Your Task:**
+1.  Analyze the 'User Prompt' in conjunction with the provided 'Resume/Job Context'.
+2.  Determine the primary intent of the user's prompt:
+    * **HR-Relevant:** If the prompt is directly about resumes, job postings, candidate evaluation, interview advice, or any recruitment-related task, considering the context.
+    * **General Conversation:** If the prompt is a casual greeting, small talk, or asks for general non-HR information, but is still polite.
+    * **Out-of-Scope/Inappropriate:** If the prompt is completely unrelated to HR, personal, or offensive.
+3.  Based on your determination, generate a response following these guidelines:
+
+**Response Guidelines:**
+
+* **If HR-Relevant:** Provide a professional, detailed, and HR-focused response directly answering the user's prompt, leveraging the 'Resume/Job Context' as needed.
+* **If General Conversation:** Respond naturally and conversationally, maintaining a positive and friendly HR assistant tone. You can engage in brief general chat but subtly steer back towards HR-related topics.
+* **If Out-of-Scope/Inappropriate:** Politely explain that you are primarily an HR assistant and suggest returning to HR or recruitment topics. Keep the tone professional and helpful. Do NOT answer non-HR questions directly. Example: "I'm primarily an HR assistant focused on recruitment and resume evaluation. How can I assist you with your career or resume needs?"
+
+---
+
+**Resume/Job Context:**
+{'; '.join(context) if context else 'No specific resume or job posting context provided.'}
+
+**User Prompt:**
+{message_prompt}
+
+---
+
+**Your Response:**
+"""
+
+            # overall_llm_response = await call_deepseek_api_async(prompt)
+            overall_llm_response_task = asyncio.create_task(call_deepseek_api_async(prompt))
             results = []
             if resumes and resumes[0][0]:
             # Process resumes concurrently
@@ -511,9 +543,14 @@ async def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]
                         results[i]['llm_response'] = f"Error generating LLM response: {str(llm_response)}"
                     else:
                         results[i]['llm_response'] = llm_response
-            
-            # logger.info(f"Processed prompt with {len(results)} resumes in {time.time() - start_time:.2f} seconds")
-            return {"results": results, "llm_response": llm_response, "errors": []}
+            overall_llm_response = ""
+            try:
+                overall_llm_response = await overall_llm_response_task
+            except Exception as e:
+                logger.error(f"Failed to get overall LLM response: {str(e)}")
+                overall_llm_response = "Something went wrong while responding. Please try again later."
+            logger.info(f"Processed prompt with {len(results)} resumes in {time.time() - start_time:.2f} seconds")
+            return {"results": results, "llm_response": overall_llm_response, "errors": []}
         # Case 2: Resume evaluation
         if not resumes or not (resumes[0][1] or default_job_posting):
             raise ValidationError(
