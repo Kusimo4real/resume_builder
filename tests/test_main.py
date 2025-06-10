@@ -1,6 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-from app.models import PDFRequest, ResumeInput
+from app.schemas import PDFRequest, ResumeInput
 import base64
 from app.exceptions import AuthenticationError, ValidationError, ProcessingError
 
