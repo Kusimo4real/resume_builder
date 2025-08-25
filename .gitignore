@@ -14,3 +14,8 @@ test_scripts/
 
 
 api_key.txt
+
+.vscode/
+.idea/
+*.log
+.DS_Store
