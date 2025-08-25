@@ -1,0 +1,74 @@
+Tables:
+
+hrms_dashb_employees(
+    employee_id, subdept_name, first_name, last_name, fullname,
+    employee_position, hire_date, employee_level, skills, project, project_two,
+    department_two, salary, vendor, location, supervisor, email, phone_no,
+    date_of_birth, age, gender, marital_status, employee_status,
+    po_position, kpi_position, emp_domain, work_type, work_location, svc_dept
+    -- FK: subdept_name → hrms_dashb_sub_departments.subdept_name
+)
+
+hrms_dashb_appraisal_data(
+    log_id, account_id, fullname, kpi_score, grade,
+    qualification_status, month_date, department, domains, tenant
+)
+
+hrms_dashb_appraisals(
+    appraisal_id, employee_id, manager_id,
+    appraisal_date, appraisal_comment, last_updated,
+    score_value, letter_grade
+    -- FK: employee_id → hrms_dashb_employees.employee_id
+)
+
+hrms_dashb_awards(
+    num_id, award_name, award_date, award_category,
+    employee_id, employee_department, employee_description, employee_image
+    -- FK: employee_id → hrms_dashb_employees.employee_id
+)
+
+hrms_dashb_projects(
+    project_name, manager_id, project, attachment
+)
+
+hrms_dashb_departments(
+    dept_name, manager_id, department
+)
+
+hrms_dashb_sub_departments(
+    subdept_name, dept_name, name
+    -- FK: dept_name → hrms_dashb_departments.dept_name
+)
+
+hrms_dashb_skills(
+    skill_name, employee_id
+    -- FK: employee_id → hrms_dashb_employees.employee_id
+)
+
+hrms_dashb_vendors(
+    vendor_id, vendor
+)
+
+hrms_dashb_roles(
+    roles_id, roles
+)
+
+hrms_dashb_level(
+    emp_level, emp_level_new
+)
+
+hrms_dashb_po_position(
+    po_position, po_position_new
+)
+
+hrms_dashb_baseline(
+    log_id, dept, tenant, baseline
+)
+
+hrms_dashb_tenant(
+    tenant
+)
+
+hrms_dashb_province_info(
+    addinfo, district, lon_lat_boundary, lon_lat_centry
+)
