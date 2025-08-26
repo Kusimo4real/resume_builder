@@ -5,7 +5,7 @@ hrms_dashb_employees(
     employee_position, hire_date, employee_level, skills, project, project_two,
     department_two, salary, vendor, location, supervisor, email, phone_no,
     date_of_birth, age, gender, marital_status, employee_status,
-    po_position, kpi_position, emp_domain, work_type, work_location, svc_dept
+    po_position, kpi_position, emp_domain, work_type, work_location, svc_dept, key_resource, potential_key_resource
     -- FK: subdept_name → hrms_dashb_sub_departments.subdept_name
 )
 

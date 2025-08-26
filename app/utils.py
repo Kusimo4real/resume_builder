@@ -604,7 +604,7 @@ async def handle_freeform_prompt(user_query: str, call_deepseek_api_async) -> st
     # A. Classify whether to query DB
     classify_prompt = f"""
 You are a classifier. Question: "{user_query}"
-Should this require querying the HR database (tables include employees, appraisals, projects, awards, departments)?
+Should this require querying the HR database (tables include employees, appraisals, projects, awards, departments, sub_departments, skills, vendors, roles, level, tenant)?
 Answer only YES or NO.
 """.strip()
     classify_resp = (await call_deepseek_api_async(classify_prompt)).strip().upper()
@@ -628,6 +628,7 @@ Answer only YES or NO.
 
     # D. Ask LLM for SQL (JSON only)
     sql_prompt = f"""
+    
 You translate natural language to SQL for the given schema.
 
 Schema:
@@ -646,6 +647,49 @@ Format: {{"tql":"..."}}
 
 User query: "{user_query}"
 """.strip()
+
+    sql_prompt = f"""
+    You are an expert SQL query generator for an HRMS database. Translate the user's natural language query into a single, valid SELECT query.
+
+Schema:
+{schema_text}
+
+Key Relationships (Foreign Keys):
+- hrms_dashb_employees.subdept_name → hrms_dashb_sub_departments.subdept_name
+- hrms_dashb_sub_departments.dept_name → hrms_dashb_departments.dept_name
+- hrms_dashb_appraisals.employee_id → hrms_dashb_employees.employee_id
+- hrms_dashb_awards.employee_id → hrms_dashb_employees.employee_id
+- hrms_dashb_skills.employee_id → hrms_dashb_employees.employee_id
+(And so on for others—extract these from your full schema.sql)
+
+Rules:
+- Generate ONLY a single SELECT statement. No INSERT/UPDATE/DELETE, no multiple statements, no semicolons.
+- Always prepend table names with "/HRMS_Dashboard/HRMS_Dashboard/" and enclose in double quotes, e.g., FROM "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_employees".
+- Use JOINs with ON clauses for multi-table queries. Use table aliases (e.g., AS e for employees).
+- Handle aggregations (COUNT, SUM, AVG) if the query asks for totals, averages, etc.
+- For filters, use WHERE clauses. Use LIKE for partial matches.
+- If the query is ambiguous, make reasonable assumptions but prioritize accuracy.
+- Think step-by-step: 1) Identify relevant tables. 2) Determine joins needed. 3) Add SELECT columns, WHERE filters, GROUP BY if aggregating. 4) Output the query.
+
+Examples:
+Query: "List all employees in the IT department."
+Reasoning: Tables: hrms_dashb_employees (has department_two), hrms_dashb_sub_departments (links to dept_name). Join on subdept_name. Filter on dept_name = 'IT'.
+SQL: SELECT e.fullname, e.employee_position FROM "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_employees" AS e JOIN "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_sub_departments" AS sd ON e.subdept_name = sd.subdept_name WHERE sd.dept_name = 'IT'
+
+Query: "What is the average KPI score for employees with more than 5 years experience, grouped by department?"
+Reasoning: Tables: hrms_dashb_employees (hire_date for experience), hrms_dashb_appraisal_data (kpi_score, department). Join on fullname or account_id (assuming match). Calculate experience as (CURRENT_DATE - hire_date) > 5 years. Aggregate AVG(kpi_score) GROUP BY department.
+SQL: SELECT ad.department, AVG(ad.kpi_score) AS avg_kpi FROM "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_appraisal_data" AS ad JOIN "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_employees" AS e ON ad.fullname = e.fullname WHERE (CURRENT_DATE - e.hire_date) > INTERVAL '5 years' GROUP BY ad.department
+
+Query: "Count awards per employee in Lagos location."
+Reasoning: Tables: hrms_dashb_awards (awards), hrms_dashb_employees (location, fullname). Join on employee_id. Filter location = 'Lagos'. Aggregate COUNT GROUP BY employee.
+SQL: SELECT e.fullname, COUNT(a.award_id) AS award_count FROM "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_employees" AS e JOIN "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_awards" AS a ON e.employee_id = a.employee_id WHERE e.location = 'Lagos' GROUP BY e.fullname
+
+User query: "{user_query}"
+
+Return ONLY valid JSON: {{"tql": "your_sql_here"}}
+    
+    """
+
     sql_json_raw = await call_deepseek_api_async(sql_prompt)
     
     logger.info(f"Generated SQL JSON: {sql_json_raw}")
@@ -673,24 +717,74 @@ User query: "{user_query}"
         return await call_deepseek_api_async(fallback_prompt)
 
     # F. Run SQL and summarize result
-    try:
-        sql_query = fix_sql(sql_query)
-        logger.info(f"Executing TQL: {sql_query}")
-        sql_results = await run_ows_tql_query(sql_query)
-        preview = summarize_sql_results(sql_results)
-        db_context = f"TQL executed: {sql_query}\nResults preview: {preview}"
-        logger.info(f"SQL executed successfully. Context length: {len(db_context)} chars")
-    except Exception as e:
-        # db_context = f"Attempted DB lookup but failed: {str(e)}"
-        db_context = """
-Database lookup failed. The HRMS system is currently unavailable.
+#     try:
+#         sql_query = fix_sql(sql_query)
+#         logger.info(f"Executing TQL: {sql_query}")
+#         sql_results = await run_ows_tql_query(sql_query)
+#         preview = summarize_sql_results(sql_results)
+#         db_context = f"TQL executed: {sql_query}\nResults preview: {preview}"
+#         logger.info(f"SQL executed successfully. Context length: {len(db_context)} chars")
+#     except Exception as e:
+#         # db_context = f"Attempted DB lookup but failed: {str(e)}"
+#         db_context = """
+# Database lookup failed. The HRMS system is currently unavailable.
+
+# Rules for responding:
+# - Do not show technical details (error codes, API URLs, stack traces).
+# - Explain the issue in simple, non-technical terms.
+# - Suggest practical next steps for the user (e.g., try again later, check HRMS portal, contact AUTIN team for support if it persists).
+#         """
+#         logger.error(db_context)
+
+#     # G. Final answer with your conditioning prompt
+#     final_prompt = build_hr_response_prompt(
+#         context_text=db_context,
+#         user_prompt=user_query
+#     )
+#     return await call_deepseek_api_async(final_prompt)
+
+    max_retries = 3
+    db_context = ""
+    for attempt in range(1, max_retries + 1):
+        try:
+            sql_query = fix_sql(sql_query)
+            logger.info(f"Executing TQL (attempt {attempt}): {sql_query}")
+            sql_results = await run_ows_tql_query(sql_query)
+            preview = summarize_sql_results(sql_results)
+            db_context = f"TQL executed: {sql_query}\nResults preview: {preview}"
+            logger.info(f"SQL executed successfully. Context length: {len(db_context)} chars")
+            break  # Success, exit loop
+        except Exception as e:
+            error_message = str(e)
+            logger.error(f"SQL execution failed (attempt {attempt}): {error_message}")
+            if attempt == max_retries:
+                db_context = """
+Database lookup failed after retries. The HRMS system is currently unavailable.
 
 Rules for responding:
 - Do not show technical details (error codes, API URLs, stack traces).
 - Explain the issue in simple, non-technical terms.
-- Suggest practical next steps for the user (e.g., try again later, check HRMS portal, contact AUTIN team for support if it persists).
-        """
-        logger.error(db_context)
+- Suggest practical next steps for the user (e.g., try again later, check HRMS portal, contact AUTIN Technical team for support if it persists).
+- Also suggest they try again with a more specific query. e.g. "Employee name, department, location, project, appraisal, award, skill, vendor"
+                """
+                break
+            # Generate correction
+            correction_prompt = f"""
+The previous SQL failed with error: {error_message}
+Original query: {user_query}
+Previous SQL: {sql_query}
+Schema: {schema_text}
+Fix the SQL step-by-step and return new JSON: {{"tql": "fixed_sql_here"}}
+""".strip()
+            correction_json_raw = await call_deepseek_api_async(correction_prompt)
+            try:
+                correction_obj = extract_json(correction_json_raw)
+                sql_query = correction_obj["tql"]
+                logger.info(f"Generated corrected SQL (attempt {attempt}): {sql_query}")
+            except Exception as corr_e:
+                logger.exception(f"Error parsing correction SQL: {corr_e}")
+                db_context = "Failed to correct SQL after error."
+                break
 
     # G. Final answer with your conditioning prompt
     final_prompt = build_hr_response_prompt(
@@ -698,6 +792,7 @@ Rules for responding:
         user_prompt=user_query
     )
     return await call_deepseek_api_async(final_prompt)
+
 
 
 async def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]], default_job_posting: Optional[JobPosting] = None, message_prompt: Optional[str] = None) -> Dict:
