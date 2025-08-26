@@ -1,3 +1,5 @@
+
+import json
 from typing import List, Dict, Optional, Tuple
 import pandas as pd
 from fastapi import HTTPException
@@ -12,7 +14,18 @@ import httpx
 import time
 import logging
 import asyncio
+from groq import Groq, AsyncGroq
+import os
 
+GROQ_API_KEY = settings.groq_api_key
+
+USERNAME = settings.ows_username
+PASSWORD = settings.ows_password
+
+OWS_BASE_URL = settings.ows_api_base_url
+
+# SCHEMA_PATH = os.path.join(os.path.dirname(__file__), '../ows_schema/hrms_schema_summary.txt')
+SCHEMA_PATH = os.path.join(os.path.dirname(__file__), '../ows_schema/hrms_schema.sql')
 
 """
     _summary_
@@ -41,6 +54,19 @@ logger = logging.getLogger(__name__)
 # Cache for ML models and scalers
 _model_cache: Dict[str, Tuple[object, object]] = {}
 
+
+def extract_json(text: str) -> dict:
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        raise ValueError("No JSON object found in response")
+    return json.loads(match.group(0))
+
+def fix_sql(sql: str) -> str:
+    # Fix common LLM mistakes
+    sql = sql.replace("FROM=", "FROM ")
+    sql = sql.replace("JOIN=", "JOIN ")
+    sql = sql.replace(";", "")  # Remove semicolons
+    return sql.strip()
 
 #Extract experience
 def extract_section(text: str, section_keywords) -> str:
@@ -222,40 +248,51 @@ def extract_number_of_jobs(text: Optional[str]) -> int:
         )
 
 
-# def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free", max_retries: int = 3) -> str:
-#     """Call DeepSeek API with retries and timeout."""
-#     deepseek_api_key = settings.deepseek_api_key_open_router
-#     if not deepseek_api_key:
-#         raise ExternalServiceError(
-#             detail="DeepSeek API key not configured",
-#             code="MISSING_API_KEY"
-#         )
-    
-#     client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=deepseek_api_key)
-#     payload = {
-#         "model": model,
-#         "messages": [{"role": "user", "content": prompt}],
-#     }
-    
-#     for attempt in range(1, max_retries + 1):
-#         try:
-#             with httpx.Client(timeout=30.0) as client:
-#                 response = client.post(
-#                     url="https://openrouter.ai/api/v1/chat/completions",
-#                     headers={"Authorization": f"Bearer {deepseek_api_key}"},
-#                     json=payload
-#                 )
-#                 response.raise_for_status()
-#                 return response.json()["choices"][0]["message"]["content"].strip()
-#         except (httpx.RequestError, httpx.HTTPStatusError) as e:
-#             if attempt == max_retries:
-#                 raise ExternalServiceError(
-#                     detail=f"Failed to call DeepSeek API after {max_retries} attempts: {str(e)}",
-#                     code="DEEPSEEK_API_FAILURE",
-#                     context={"attempts": max_retries}
-#                 )
-#             time.sleep(2 ** attempt)  # Exponential backoff
-#     return ""  # Should never reach here
+async def call_groq_api_async(
+    prompt: str,
+    # model: str = "llama3-8b-8192",
+    model: str = "openai/gpt-oss-20b",
+    max_retries: int = 2,
+    timeout: float = 5.0,
+) -> str:
+    """Call Groq chat completion API asynchronously with retries and timeout."""
+    groq_api_key = GROQ_API_KEY
+    if not groq_api_key:
+        raise ExternalServiceError(
+            detail="Groq API key not configured",
+            code="MISSING_API_KEY",
+        )
+
+    client = AsyncGroq(api_key=groq_api_key)
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            start_time = time.time()
+            response = await client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=model,
+                timeout=timeout  # If SDK supports it
+            )
+            elapsed = time.time() - start_time
+            logger.info(f"Groq API call took {elapsed:.2f} seconds (attempt {attempt})")
+            return response.choices[0].message.content.strip()
+
+        except (httpx.RequestError, httpx.HTTPStatusError, Exception) as e:
+            logger.warning(
+                f"Groq API call attempt {attempt} failed: {e}"
+            )
+            if attempt == max_retries:
+                raise ExternalServiceError(
+                    detail=f"Failed to call Groq API after {max_retries} attempts: {str(e)}",
+                    code="GROQ_API_FAILURE",
+                    context={"attempts": max_retries},
+                )
+            backoff = 2 ** attempt
+            logger.info(f"Retrying in {backoff} seconds...")
+            await asyncio.sleep(backoff)
+
+    # Safety fallback, though unreachable
+    return ""
 
 async def call_deepseek_api_async(prompt: str, model: str = "deepseek/deepseek-r1:free", max_retries: int = 2) -> str:
     """Call DeepSeek API asynchronously with retries and timeout."""
@@ -292,9 +329,10 @@ async def call_deepseek_api_async(prompt: str, model: str = "deepseek/deepseek-r
                 await asyncio.sleep(2 ** attempt)  # Exponential backoff
     return ""
 
+
 def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free", max_retries: int = 2) -> str:
     """Synchronous wrapper for DeepSeek API call."""
-    return asyncio.run(call_deepseek_api_async(prompt, model, max_retries))
+    return asyncio.run(call_groq_api_async(prompt, model, max_retries))
 
 
 async def assess_prompt_scope(prompt: str) -> str:
@@ -308,8 +346,9 @@ Determine if the following prompt is:
 Prompt: "{prompt}"
 Respond with only 'relevant', 'general', or 'out-of-scope'.
     """
-    response = await call_deepseek_api_async(scope_prompt)
+    response = await call_groq_api_async(scope_prompt)
     return response
+
 
 async def process_single_resume_async(resume: Resume, job_posting: JobPosting, file_base64: str) -> MatchResponse:
     """Process a single resume asynchronously against a job posting."""
@@ -440,10 +479,225 @@ async def get_llm_response_for_resume(resume: Resume, job_posting: JobPosting, m
     - Match Label: {match_response['match_label']}
     Write a concise, professional response (100-250 words) evaluating the candidate’s fit, highlighting strengths, noting gaps, and suggesting next steps. Use a positive tone.
     """
-    response = await call_deepseek_api_async(prompt)
+    response = await call_groq_api_async(prompt)
     logger.info(f"Generated LLM response for {resume['name']} in {time.time() - start_time:.2f} seconds")
     return response
 
+async def run_ows_tql_query(tql: str) -> Dict:
+    url = f"{OWS_BASE_URL}/adc-intg/api/rest/v1/HR_RESUME_APP/HR_AI_API/hr_ai_api_hrms_data_query/hrms_data_query"
+    auth = httpx.BasicAuth(USERNAME, PASSWORD)
+    async with httpx.AsyncClient(auth=auth) as client:
+        resp = await client.post(url, json={"tql": tql})
+        resp.raise_for_status()
+        return resp.json()
+    
+    
+# async def handle_freeform_prompt(user_query: str) -> str:
+#     # Step A: classify if DB lookup is needed
+#     classify_prompt = f"""
+#     You are a classifier. Question: "{user_query}"
+#     Should this require querying the HR database (tables: hrms_dashb_employees, hrms_dashb_appraisal_data, hrms_dashb_appraisals, hrms_dashb_projects, hrms_dashb_departments, hrms_dashb_sub_departments, hrms_dashb_skills, hrms_dashb_vendors, hrms_dashb_level, hrms_dashb_roles, hrms_dashb_baseline, hrms_dashb_tenant, hrms_dashb_province_info)?
+#     Answer only 'YES' or 'NO'.
+#     """
+#     classify_resp = await call_deepseek_api_async(classify_prompt)
+
+#     if "NO" in classify_resp.upper():
+#         # Just let LLM answer directly
+#         return await call_deepseek_api_async(user_query)
+
+#     # Step B: load schema
+#     with open("../ows_schema/hrms_schema.txt") as f:
+#         schema_text = f.read()
+
+#     sql_prompt = f"""
+#     You are a SQL generator.
+#     Only SELECT is allowed.
+#     Schema:
+#     {schema_text}
+
+#     User query: "{user_query}"
+#     Return JSON with {{ "sql": "..." }} only.
+#     """
+#     sql_json = await call_deepseek_api_async(sql_prompt)
+#     sql_query = json.loads(sql_json)["sql"]
+
+#     # Step C: run SQL via API
+#     try:
+#         sql_results = await run_ows_tql_query(sql_query)
+#     except Exception as e:
+#         return f"I tried to run a query but failed: {str(e)}"
+
+#     # Step D: final answer with results
+#     answer_prompt = f"""
+#     User asked: "{user_query}"
+#     SQL executed: {sql_query}
+#     Results: {sql_results}
+
+#     Provide a natural, HR-assistant style answer using the results.
+#     """
+#     return await call_deepseek_api_async(answer_prompt)
+
+
+def build_hr_response_prompt(context_text: str, user_prompt: str) -> str:
+    """Your conditioning prompt applied consistently."""
+    return f"""
+You are a highly skilled HR assistant specializing in recruitment and resume evaluation for Huawei Technologies Lagos Nigeria.
+
+You have access to the the HRMS database and can query it as needed to assist with recruitment, employee management, and resume evaluation tasks.
+
+**Your Task:**
+1.  Analyze the 'User Prompt' in conjunction with the provided 'Resume/Job Context'.
+2.  Determine the primary intent of the user's prompt:
+    * **HR-Relevant:** If the prompt is directly about resumes, job postings, candidate evaluation, interview advice, or any recruitment-related task, considering the context.
+    * **General Conversation:** If the prompt is a casual greeting, small talk, or asks for general non-HR information, but is still polite.
+    * **Out-of-Scope/Inappropriate:** If the prompt is completely unrelated to HR, personal, or offensive.
+3.  Based on your determination, respond following these guidelines:
+
+**Response Guidelines:**
+
+* **If HR-Relevant:** Provide a professional, detailed, and HR-focused response directly answering the user's prompt, leveraging the 'Resume/Job Context' as needed.
+* **If General Conversation:** Respond naturally and conversationally, maintaining a positive and friendly HR assistant tone. You can engage in brief general chat but subtly steer back towards HR-related topics.
+* **If Out-of-Scope/Inappropriate:** Politely explain that you are primarily an HR assistant and suggest returning to HR or recruitment topics. Keep the tone professional and helpful. Do NOT answer non-HR questions directly. Example: "I'm primarily an HR assistant focused on recruitment and resume evaluation. How can I assist you with your career or resume needs?"
+
+---
+
+**Resume/Job Context:**
+{context_text if context_text else 'No specific resume or job posting context provided.'}
+
+**User Prompt:**
+{user_prompt}
+
+---
+
+**Your Response:**
+""".strip()
+
+def summarize_sql_results(payload: dict, max_chars: int = 2500) -> str:
+    """
+    Compact preview for the LLM context.
+    Assumes your SQL API returns JSON. We just truncate the JSON string safely.
+    """
+    try:
+        text = json.dumps(payload, ensure_ascii=False)
+    except Exception:
+        text = str(payload)
+    return (text[:max_chars] + "…") if len(text) > max_chars else text
+
+def is_safe_select(sql: str) -> bool:
+    """Very simple safety gate: allow only single-statement SELECTs."""
+    s = sql.strip().lower()
+    if not s.startswith("select"):
+        return False
+    # forbid multiple statements / known dangerous keywords
+    forbidden = [";", " update ", " delete ", " insert ", " drop ", " alter ",
+                 " truncate ", " grant ", " revoke ", " create ", " execute ",
+                 " call ", " into "]
+    return not any(tok in f" {s} " for tok in forbidden)
+
+async def handle_freeform_prompt(user_query: str, call_deepseek_api_async) -> str:
+    """
+    Free-form path:
+      1) classify if DB lookup needed
+      2) if needed: generate SQL -> run -> inject results
+      3) ALWAYS finish with your conditioning prompt
+    """
+    # A. Classify whether to query DB
+    classify_prompt = f"""
+You are a classifier. Question: "{user_query}"
+Should this require querying the HR database (tables include employees, appraisals, projects, awards, departments)?
+Answer only YES or NO.
+""".strip()
+    classify_resp = (await call_deepseek_api_async(classify_prompt)).strip().upper()
+    logger.info(f"Classification response: {classify_resp}")
+    # B. If NO DB needed: answer directly with conditioning
+    if "NO" in classify_resp:
+        logger.info("Skipping DB lookup as per classification.")
+        final_prompt = build_hr_response_prompt(
+            context_text="No specific resume or job posting context provided.",
+            user_prompt=user_query
+        )
+        return await call_deepseek_api_async(final_prompt)
+
+    # C. Load summarized schema (for SQL generation)
+    try:
+        with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
+            schema_text = f.read()
+    except FileNotFoundError:
+        logger.warning("Schema file not found, using fallback")
+        schema_text = "hrms_dashb_employees(...), hrms_dashb_appraisals(...), hrms_dashb_awards(...)"  # tiny fallback
+
+    # D. Ask LLM for SQL (JSON only)
+    sql_prompt = f"""
+You translate natural language to SQL for the given schema.
+
+Schema:
+{schema_text}
+
+Rules:
+- Generate a single-statement SELECT query only.
+- Never use INSERT, UPDATE, DELETE, DROP, ALTER, or multiple statements.
+- Put all table names in double quotes and prepend with "/HRMS_Dashboard/HRMS_Dashboard/"
+- Table names must appear as FROM "<table_name>" (with a space, never '=')
+- Do not add a semicolon at the end.
+- Use JOINs as needed, with proper ON clauses.
+- Return only valid JSON with no extra text, no explanations, and no markdown.
+
+Format: {{"tql":"..."}}
+
+User query: "{user_query}"
+""".strip()
+    sql_json_raw = await call_deepseek_api_async(sql_prompt)
+    
+    logger.info(f"Generated SQL JSON: {sql_json_raw}")
+
+    # E. Parse & validate SQL
+    try:
+        sql_obj = extract_json(sql_json_raw)
+        logger.info(f"Extracted SQL JSON object: {sql_obj}")
+        sql_query = json.loads(sql_json_raw)["tql"]
+    except Exception as e:
+        logger.exception(f"Error parsing SQL JSON from LLM: {e}")
+        # If the LLM didn't return valid JSON, fall back to conditioned answer without DB
+        fallback_prompt = build_hr_response_prompt(
+            context_text="No specific resume or job posting context provided.",
+            user_prompt=user_query
+        )
+        return await call_deepseek_api_async(fallback_prompt)
+
+    if not is_safe_select(sql_query):
+        # refuse unsafe SQL; still answer, but without DB context
+        fallback_prompt = build_hr_response_prompt(
+            context_text="DB query was rejected for safety. Proceed without DB context.",
+            user_prompt=user_query
+        )
+        return await call_deepseek_api_async(fallback_prompt)
+
+    # F. Run SQL and summarize result
+    try:
+        sql_query = fix_sql(sql_query)
+        logger.info(f"Executing TQL: {sql_query}")
+        sql_results = await run_ows_tql_query(sql_query)
+        preview = summarize_sql_results(sql_results)
+        db_context = f"TQL executed: {sql_query}\nResults preview: {preview}"
+        logger.info(f"SQL executed successfully. Context length: {len(db_context)} chars")
+    except Exception as e:
+        # db_context = f"Attempted DB lookup but failed: {str(e)}"
+        db_context = """
+Database lookup failed. The HRMS system is currently unavailable.
+
+Rules for responding:
+- Do not show technical details (error codes, API URLs, stack traces).
+- Explain the issue in simple, non-technical terms.
+- Suggest practical next steps for the user (e.g., try again later, check HRMS portal, contact AUTIN team for support if it persists).
+        """
+        logger.error(db_context)
+
+    # G. Final answer with your conditioning prompt
+    final_prompt = build_hr_response_prompt(
+        context_text=db_context,
+        user_prompt=user_query
+    )
+    return await call_deepseek_api_async(final_prompt)
 
 
 async def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]], default_job_posting: Optional[JobPosting] = None, message_prompt: Optional[str] = None) -> Dict:
@@ -453,6 +707,9 @@ async def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]
         # Case 1: Custom prompt provided
         if message_prompt:
             # scope = await assess_prompt_scope(message_prompt)
+            if not resumes or not resumes[0][0]:   # no resumes provided
+                overall_llm_response = await handle_freeform_prompt(user_query=message_prompt, call_deepseek_api_async=call_groq_api_async)
+                return {"results": [], "llm_response": overall_llm_response, "errors": []}
             
             # Build context if resumes are provided
             context = []
@@ -463,46 +720,21 @@ async def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]
                         context.append(f"Candidate: {resume['name']}, Role: {job_posting.job_role}, Skills: {', '.join(resume['skills'][:5])}, Experience: {resume['experience']} years")
                     else:
                         context.append(f"Candidate: {resume['name']}, Skills: {', '.join(resume['skills'][:5])}, Experience: {resume['experience']} years. No job posting provided.")
-    #         # Handle prompt based on scope
-    #         if scope == 'relevant':
-    #             prompt = f"""
-    # You are a professional HR assistant specializing in recruitment and resume evaluation.
-    # Context: {'; '.join(context) if context else 'No resume/job context provided.'}
-    # User prompt: {message_prompt}
-    # Respond in a professional, HR-focused manner.
-    #             """
-    #         elif scope == 'general':
-    #             prompt = f"""
-    # You are a friendly HR assistant specializing in recruitment and resume evaluation.
-    # Respond naturally and conversationally to the user's prompt, keeping a positive tone.
-    # You can engage in general chat but subtly steer toward HR-related topics when appropriate.
-    # {'Context: ' +  '; '.join(context) if context else ''}
-    # User prompt: {message_prompt}
-    #             """
-    #         else:  # out-of-scope
-    #             prompt = f"""
-    # You are an HR assistant specializing in recruitment and resume evaluation.
-    # The user's prompt seems unrelated to HR tasks.
-    # Respond politely, explaining you're primarily an HR assistant, and suggest returning to HR topics.
-    # Keep the tone positive and professional.
-    # User prompt: {message_prompt}
-    # Example response: "I'm primarily an HR assistant focused on recruitment and resume evaluation. I can help with that or chat a bit, but let's keep it relevant!"
-    #             """
-
+                        
             prompt = f"""
-You are a highly skilled HR assistant specializing in recruitment and resume evaluation.
+You are a highly skilled HR assistant specializing in recruitment, employee management, and resume evaluation for Huawei Technologies Nigeria.
 
 **Your Task:**
 1.  Analyze the 'User Prompt' in conjunction with the provided 'Resume/Job Context'.
 2.  Determine the primary intent of the user's prompt:
-    * **HR-Relevant:** If the prompt is directly about resumes, job postings, candidate evaluation, interview advice, or any recruitment-related task, considering the context.
+    * **HR-Relevant:** If the prompt is directly about resumes, job postings, candidate evaluation, interview advice, or any HR related task, considering the context.
     * **General Conversation:** If the prompt is a casual greeting, small talk, or asks for general non-HR information, but is still polite.
     * **Out-of-Scope/Inappropriate:** If the prompt is completely unrelated to HR, personal, or offensive.
-3.  Based on your determination, generate a response following these guidelines:
+3.  Based on your determination, respond following these guidelines:
 
 **Response Guidelines:**
 
-* **If HR-Relevant:** Provide a professional, detailed, and HR-focused response directly answering the user's prompt, leveraging the 'Resume/Job Context' as needed.
+* **If HR-Relevant:** Provide a professional, detailed, and HR-focused response directly answering the user's prompt, leveraging the 'Resume/Job Context/database' as needed.
 * **If General Conversation:** Respond naturally and conversationally, maintaining a positive and friendly HR assistant tone. You can engage in brief general chat but subtly steer back towards HR-related topics.
 * **If Out-of-Scope/Inappropriate:** Politely explain that you are primarily an HR assistant and suggest returning to HR or recruitment topics. Keep the tone professional and helpful. Do NOT answer non-HR questions directly. Example: "I'm primarily an HR assistant focused on recruitment and resume evaluation. How can I assist you with your career or resume needs?"
 
@@ -520,7 +752,7 @@ You are a highly skilled HR assistant specializing in recruitment and resume eva
 """
 
             # overall_llm_response = await call_deepseek_api_async(prompt)
-            overall_llm_response_task = asyncio.create_task(call_deepseek_api_async(prompt))
+            overall_llm_response_task = asyncio.create_task(call_groq_api_async(prompt))
             results = []
             if resumes and resumes[0][0]:
             # Process resumes concurrently
@@ -605,28 +837,6 @@ You are a highly skilled HR assistant specializing in recruitment and resume eva
         # Rank resumes by match_score
         valid_results = sorted(valid_results, key=lambda x: x['match_score'], reverse=True)
 
-        # For now the overall LLM response is not generated, but can be uncommented if needed
-        # Generate overall LLM response
-        # if len(valid_results) == 1:
-        #     llm_response = valid_results[0]['llm_response']
-        # else:
-        #     context = []
-        #     for i, res in enumerate(valid_results, 1):
-        #         job_role = res['job_role']
-        #         context.append(f"Candidate {i}: {res['candidate_name']} for {job_role}, Match Score: {res['match_score']:.2f}, Skills: {', '.join(resumes[i-1][0]['skills'][:5])}, Experience: {resumes[i-1][0]['experience']} years")
-        #     prompt = f"""
-        #     You are a professional hiring manager reviewing multiple candidates.
-        #     Context: {'; '.join(context)}.
-        #     Ranked by match score, summarize the candidates’ fit for their respective roles (or shared role if applicable). Highlight top candidates’ strengths, note any common gaps, and suggest next steps (e.g., interviews, training). Keep the response comprehensive and professional.
-        #     """
-        #     llm_response = await call_deepseek_api_async(prompt)
-
-        # response = {
-        #     "results": valid_results,
-        #     "llm_response": llm_response,
-        #     "errors": errors,
-        #     "context": {"processed": len(valid_results), "failed": len(errors)}
-        # }
         response = {
             "results": valid_results,
             "llm_response": "",
