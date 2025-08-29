@@ -16,6 +16,7 @@ import logging
 import asyncio
 from groq import Groq, AsyncGroq
 import os
+from collections import deque
 
 GROQ_API_KEY = settings.groq_api_key
 
@@ -53,6 +54,10 @@ logger = logging.getLogger(__name__)
 
 # Cache for ML models and scalers
 _model_cache: Dict[str, Tuple[object, object]] = {}
+
+
+# Memory for last 5 interactions
+_interaction_memory = deque(maxlen=5)  # Stores {user_query, response} pairs
 
 
 def extract_json(text: str) -> dict:
@@ -250,8 +255,8 @@ def extract_number_of_jobs(text: Optional[str]) -> int:
 
 async def call_groq_api_async(
     prompt: str,
-    # model: str = "llama3-8b-8192",
-    model: str = "openai/gpt-oss-20b",
+    # model: str = "deepseek-r1-distill-llama-70b",
+    model: str = "openai/gpt-oss-120b",
     max_retries: int = 2,
     timeout: float = 5.0,
 ) -> str:
@@ -336,7 +341,12 @@ def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free", max
 
 
 async def assess_prompt_scope(prompt: str) -> str:
-    """Assess if a prompt is HR-relevant, general conversation, or out-of-scope."""
+    """Assess if a prompt is HR-relevant, general conversation, out-of-scope, or restricted (salary-related)."""
+    # Check for salary-related keywords
+    salary_keywords = r"\b(salary|salaries|compensation|pay|wage|wages|income|earnings)\b"
+    if re.search(salary_keywords, prompt, re.IGNORECASE):
+        return "restricted"
+    
     scope_prompt = f"""
 You are an HR assistant specializing in recruitment and resume evaluation.
 Determine if the following prompt is:
@@ -348,7 +358,6 @@ Respond with only 'relevant', 'general', or 'out-of-scope'.
     """
     response = await call_groq_api_async(scope_prompt)
     return response
-
 
 async def process_single_resume_async(resume: Resume, job_posting: JobPosting, file_base64: str) -> MatchResponse:
     """Process a single resume asynchronously against a job posting."""
@@ -467,7 +476,7 @@ async def get_llm_response_for_resume(resume: Resume, job_posting: JobPosting, m
     """Generate LLM response for a single resume."""
     start_time = time.time()
     prompt = f"""
-    You are a professional hiring manager reviewing a candidate for a {match_response['job_role']} position requiring {', '.join(job_posting.skills)}, {job_posting.experience} years of experience, and a {job_posting.education} degree.
+    You are a professional hiring manager for Huawei Technologies, Lagos reviewing a candidate for a {match_response['job_role']} position requiring {', '.join(job_posting.skills)}, {job_posting.experience} years of experience, and a {job_posting.education} degree.
     Candidate: {match_response['candidate_name']}
     Skills: {', '.join(resume['skills'][:5])}
     Experience: {resume['experience']} years
@@ -540,13 +549,20 @@ async def run_ows_tql_query(tql: str) -> Dict:
 
 def build_hr_response_prompt(context_text: str, user_prompt: str) -> str:
     """Your conditioning prompt applied consistently."""
+    # Format recent interactions for context
+    memory_context = ""
+    if _interaction_memory:
+        memory_context = "Recent Interactions:\n"
+        for i, interaction in enumerate(_interaction_memory, 1):
+            memory_context += f"{i}. User: {interaction['user_query']}\n   Response: {interaction['response'][:100]}...\n"
+        memory_context += "\nUse this context to provide a more informed response, if relevant.\n"
     return f"""
-You are a highly skilled HR assistant specializing in recruitment and resume evaluation for Huawei Technologies Lagos Nigeria.
+You are a highly skilled HR assistant specializing in recruitment and resume evaluation for RNOC Department Huawei  Technologies Lagos Nigeria.
 
 You have access to the the HRMS database and can query it as needed to assist with recruitment, employee management, and resume evaluation tasks.
 
 **Your Task:**
-1.  Analyze the 'User Prompt' in conjunction with the provided 'Resume/Job Context'.
+1.  Analyze the 'User Prompt' in conjunction with the provided 'Resume/Job Context' and recent interactions.
 2.  Determine the primary intent of the user's prompt:
     * **HR-Relevant:** If the prompt is directly about resumes, job postings, candidate evaluation, interview advice, or any recruitment-related task, considering the context.
     * **General Conversation:** If the prompt is a casual greeting, small talk, or asks for general non-HR information, but is still polite.
@@ -560,6 +576,8 @@ You have access to the the HRMS database and can query it as needed to assist wi
 * **If Out-of-Scope/Inappropriate:** Politely explain that you are primarily an HR assistant and suggest returning to HR or recruitment topics. Keep the tone professional and helpful. Do NOT answer non-HR questions directly. Example: "I'm primarily an HR assistant focused on recruitment and resume evaluation. How can I assist you with your career or resume needs?"
 
 ---
+**Memory Context:**
+{memory_context if memory_context else 'No recent interactions.'}
 
 **Resume/Job Context:**
 {context_text if context_text else 'No specific resume or job posting context provided.'}
@@ -601,7 +619,16 @@ async def handle_freeform_prompt(user_query: str, call_deepseek_api_async) -> st
       2) if needed: generate SQL -> run -> inject results
       3) ALWAYS finish with your conditioning prompt
     """
-    # A. Classify whether to query DB
+    # A. Check for salary-related keywords first
+    classify_resp = (await assess_prompt_scope(user_query)).strip().lower()
+    if classify_resp == "restricted":
+        logger.info("Prompt classified as restricted due to salary-related content.")
+        final_prompt = build_hr_response_prompt(context_text="Queries about employee salaries are restricted due to company policy.", user_prompt=user_query)
+        response = await call_deepseek_api_async(final_prompt)
+        _interaction_memory.append({"user_query": user_query, "response": response})
+        return response
+    
+    # B. Classify whether to query DB
     classify_prompt = f"""
 You are a classifier. Question: "{user_query}"
 Should this require querying the HR database (tables include employees, appraisals, projects, awards, departments, sub_departments, skills, vendors, roles, level, tenant)?
@@ -609,7 +636,7 @@ Answer only YES or NO.
 """.strip()
     classify_resp = (await call_deepseek_api_async(classify_prompt)).strip().upper()
     logger.info(f"Classification response: {classify_resp}")
-    # B. If NO DB needed: answer directly with conditioning
+    # C. If NO DB needed: answer directly with conditioning
     if "NO" in classify_resp:
         logger.info("Skipping DB lookup as per classification.")
         final_prompt = build_hr_response_prompt(
@@ -618,7 +645,7 @@ Answer only YES or NO.
         )
         return await call_deepseek_api_async(final_prompt)
 
-    # C. Load summarized schema (for SQL generation)
+    # D. Load summarized schema (for SQL generation)
     try:
         with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
             schema_text = f.read()
@@ -626,7 +653,7 @@ Answer only YES or NO.
         logger.warning("Schema file not found, using fallback")
         schema_text = "hrms_dashb_employees(...), hrms_dashb_appraisals(...), hrms_dashb_awards(...)"  # tiny fallback
 
-    # D. Ask LLM for SQL (JSON only)
+    # E. Ask LLM for SQL (JSON only)
     sql_prompt = f"""
     
 You translate natural language to SQL for the given schema.
@@ -661,14 +688,19 @@ Key Relationships (Foreign Keys):
 - hrms_dashb_awards.employee_id → hrms_dashb_employees.employee_id
 - hrms_dashb_skills.employee_id → hrms_dashb_employees.employee_id
 (And so on for others—extract these from your full schema.sql)
+- Departments and team names may be referred to interchangeably so recognize that and let your queries check both tables every time.
+- The word autin refers to the AUTIN team within Huawei.
 
 Rules:
 - Generate ONLY a single SELECT statement. No INSERT/UPDATE/DELETE, no multiple statements, no semicolons.
 - Always prepend table names with "/HRMS_Dashboard/HRMS_Dashboard/" and enclose in double quotes, e.g., FROM "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_employees".
 - Use JOINs with ON clauses for multi-table queries. Use table aliases (e.g., AS e for employees).
 - Handle aggregations (COUNT, SUM, AVG) if the query asks for totals, averages, etc.
+- Avoid using COUNT(*): When counting rows, specify a particular column instead of using the wildcard. For example, use COUNT(column_name) instead of COUNT(*)
 - For filters, use WHERE clauses. Use LIKE for partial matches.
 - If the query is ambiguous, make reasonable assumptions but prioritize accuracy.
+- When referencing a person's name, always apply proper casing by capitalizing the first letters of the name.
+- For name searches: Use LIKE with wildcards (e.g., fullname LIKE '%John%') for partial or ambiguous names (e.g., 'John', 'Smith'). Use exact match (e.g., fullname = 'John Doe') for full names or when the query specifies an exact employee. If unsure, prefer LIKE for single names and = for full names.
 - Think step-by-step: 1) Identify relevant tables. 2) Determine joins needed. 3) Add SELECT columns, WHERE filters, GROUP BY if aggregating. 4) Output the query.
 
 Examples:
@@ -764,8 +796,8 @@ Database lookup failed after retries. The HRMS system is currently unavailable.
 Rules for responding:
 - Do not show technical details (error codes, API URLs, stack traces).
 - Explain the issue in simple, non-technical terms.
-- Suggest practical next steps for the user (e.g., try again later, check HRMS portal, contact AUTIN Technical team for support if it persists).
-- Also suggest they try again with a more specific query. e.g. "Employee name, department, location, project, appraisal, award, skill, vendor"
+- Suggest they try again with a more specific query. e.g. "Employee name, department, location, project, appraisal, award, skill, vendor"
+- Also suggest practical next steps for the user (e.g., try again later, check HRMS portal, contact AUTIN Technical team for support if it persists).
                 """
                 break
             # Generate correction
