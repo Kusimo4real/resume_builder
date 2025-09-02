@@ -17,6 +17,8 @@ import asyncio
 from groq import Groq, AsyncGroq
 import os
 from collections import deque
+from urllib.parse import quote
+import ows_functions.ows_api as ows_api
 
 GROQ_API_KEY = settings.groq_api_key
 
@@ -27,6 +29,44 @@ OWS_BASE_URL = settings.ows_api_base_url
 
 # SCHEMA_PATH = os.path.join(os.path.dirname(__file__), '../ows_schema/hrms_schema_summary.txt')
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), '../ows_schema/hrms_schema.sql')
+
+
+LLM_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "query_database",
+            "description": "Query the HRMS database with a SQL statement. Follow the SQL rules: only SELECT, prepend table names with \"/HRMS_Dashboard/HRMS_Dashboard/\", enclose tables in double quotes, use aliases, etc.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tql": {
+                        "type": "string",
+                        "description": "The SQL SELECT statement to execute."
+                    }
+                },
+                "required": ["tql"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recommend_candidates",
+            "description": "Recommend candidates for a job role, CV, or position. Use this when asked to suggest or recommend candidates.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_title": {
+                        "type": "string",
+                        "description": "The job title or role to recommend candidates for."
+                    }
+                },
+                "required": ["job_title"]
+            }
+        }
+    }
+]
 
 """
     _summary_
@@ -68,7 +108,7 @@ def extract_json(text: str) -> dict:
 
 def fix_sql(sql: str) -> str:
     # Fix common LLM mistakes
-    sql = sql.replace("FROM=", "FROM ")
+    sql = sql.replace("FROM=", "FROM ") 
     sql = sql.replace("JOIN=", "JOIN ")
     sql = sql.replace(";", "")  # Remove semicolons
     return sql.strip()
@@ -252,11 +292,42 @@ def extract_number_of_jobs(text: Optional[str]) -> int:
             code="NUMBER_OF_JOBS_ERROR"
         )
 
+async def execute_tool(tool_call):
+    name = tool_call.function.name
+    args = json.loads(tool_call.function.arguments)
+    if name == "query_database":
+        tql = args["tql"]
+        if not is_safe_select(tql):
+            return {"error": "Unsafe SQL query. Only SELECT statements are allowed."}
+        tql = fix_sql(tql)
+        try:
+            results = await query_database(tql)
+            return {"results": results, "tql": tql}
+        except Exception as e:
+            return {"error": f"SQL execution failed: {str(e)}"}
+    elif name == "recommend_candidates":
+        job_title = args["job_title"]
+        url = f"{OWS_BASE_URL}/adc-intg/api/rest/v1/HR_RESUME_APP/HR_AI_API/hr_ai_api_recommend_candidate/recommend_candidate/recommend_candidate"  # Replace with actual endpoint
+        payload = {"job_title": job_title}
+        auth = httpx.BasicAuth(USERNAME, PASSWORD)
+        async with httpx.AsyncClient(auth=auth) as client:
+            try:
+                resp = await client.post(url, json=payload)
+                resp.raise_for_status()
+                candidates = resp.json()
+                for cand in candidates:
+                    cand["url"] = f"{OWS_BASE_URL}/adc-ui/spl-plus/HR_RESUME_APP/HR_AI_ASSISTANT/ai_recommended_view?name={quote(cand['name'])}&email={quote(cand['email'])}"
+                return {"candidates": candidates}
+            except Exception as e:
+                return {"error": f"Could not fetch candidates for {job_title}: {str(e)}"}
+    else:
+        return {"error": "Unknown tool"}
 
 async def call_groq_api_async(
     prompt: str,
     # model: str = "deepseek-r1-distill-llama-70b",
     model: str = "openai/gpt-oss-120b",
+    tools: Optional[List[Dict]] = None,
     max_retries: int = 2,
     timeout: float = 5.0,
 ) -> str:
@@ -275,6 +346,8 @@ async def call_groq_api_async(
             start_time = time.time()
             response = await client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
+                tools=tools or None,
+                tool_choice="auto" if tools else 'none',
                 model=model,
                 timeout=timeout  # If SDK supports it
             )
@@ -492,7 +565,7 @@ async def get_llm_response_for_resume(resume: Resume, job_posting: JobPosting, m
     logger.info(f"Generated LLM response for {resume['name']} in {time.time() - start_time:.2f} seconds")
     return response
 
-async def run_ows_tql_query(tql: str) -> Dict:
+async def query_database(tql: str) -> Dict:
     url = f"{OWS_BASE_URL}/adc-intg/api/rest/v1/HR_RESUME_APP/HR_AI_API/hr_ai_api_hrms_data_query/hrms_data_query"
     auth = httpx.BasicAuth(USERNAME, PASSWORD)
     async with httpx.AsyncClient(auth=auth) as client:
@@ -501,50 +574,6 @@ async def run_ows_tql_query(tql: str) -> Dict:
         return resp.json()
     
     
-# async def handle_freeform_prompt(user_query: str) -> str:
-#     # Step A: classify if DB lookup is needed
-#     classify_prompt = f"""
-#     You are a classifier. Question: "{user_query}"
-#     Should this require querying the HR database (tables: hrms_dashb_employees, hrms_dashb_appraisal_data, hrms_dashb_appraisals, hrms_dashb_projects, hrms_dashb_departments, hrms_dashb_sub_departments, hrms_dashb_skills, hrms_dashb_vendors, hrms_dashb_level, hrms_dashb_roles, hrms_dashb_baseline, hrms_dashb_tenant, hrms_dashb_province_info)?
-#     Answer only 'YES' or 'NO'.
-#     """
-#     classify_resp = await call_deepseek_api_async(classify_prompt)
-
-#     if "NO" in classify_resp.upper():
-#         # Just let LLM answer directly
-#         return await call_deepseek_api_async(user_query)
-
-#     # Step B: load schema
-#     with open("../ows_schema/hrms_schema.txt") as f:
-#         schema_text = f.read()
-
-#     sql_prompt = f"""
-#     You are a SQL generator.
-#     Only SELECT is allowed.
-#     Schema:
-#     {schema_text}
-
-#     User query: "{user_query}"
-#     Return JSON with {{ "sql": "..." }} only.
-#     """
-#     sql_json = await call_deepseek_api_async(sql_prompt)
-#     sql_query = json.loads(sql_json)["sql"]
-
-#     # Step C: run SQL via API
-#     try:
-#         sql_results = await run_ows_tql_query(sql_query)
-#     except Exception as e:
-#         return f"I tried to run a query but failed: {str(e)}"
-
-#     # Step D: final answer with results
-#     answer_prompt = f"""
-#     User asked: "{user_query}"
-#     SQL executed: {sql_query}
-#     Results: {sql_results}
-
-#     Provide a natural, HR-assistant style answer using the results.
-#     """
-#     return await call_deepseek_api_async(answer_prompt)
 
 
 def build_hr_response_prompt(context_text: str, user_prompt: str) -> str:
@@ -554,10 +583,11 @@ def build_hr_response_prompt(context_text: str, user_prompt: str) -> str:
     if _interaction_memory:
         memory_context = "Recent Interactions:\n"
         for i, interaction in enumerate(_interaction_memory, 1):
-            memory_context += f"{i}. User: {interaction['user_query']}\n   Response: {interaction['response'][:100]}...\n"
+            memory_context += f"{i}. User: {interaction['user_query']}\n   Response: {interaction['response'][:200]}...\n"
         memory_context += "\nUse this context to provide a more informed response, if relevant.\n"
+    logger.info(f"Memory context:\n{memory_context}")
     return f"""
-You are a highly skilled HR assistant specializing in recruitment and resume evaluation for RNOC Department Huawei  Technologies Lagos Nigeria.
+You are a highly skilled HR assistant specializing in recruitment and resume evaluation for RNOC Department, Huawei Technologies Lagos Nigeria.
 
 You have access to the the HRMS database and can query it as needed to assist with recruitment, employee management, and resume evaluation tasks.
 
@@ -643,7 +673,9 @@ Answer only YES or NO.
             context_text="No specific resume or job posting context provided.",
             user_prompt=user_query
         )
-        return await call_deepseek_api_async(final_prompt)
+        response = await call_deepseek_api_async(final_prompt)
+        _interaction_memory.append({"user_query": user_query, "response": response})
+        return response
 
     # D. Load summarized schema (for SQL generation)
     try:
@@ -746,13 +778,16 @@ Return ONLY valid JSON: {{"tql": "your_sql_here"}}
             context_text="DB query was rejected for safety. Proceed without DB context.",
             user_prompt=user_query
         )
-        return await call_deepseek_api_async(fallback_prompt)
+        response = await call_deepseek_api_async(fallback_prompt)
+        _interaction_memory.append({"user_query": user_query, "response": response})
+        return response
+    
 
     # F. Run SQL and summarize result
 #     try:
 #         sql_query = fix_sql(sql_query)
 #         logger.info(f"Executing TQL: {sql_query}")
-#         sql_results = await run_ows_tql_query(sql_query)
+#         sql_results = await query_database(sql_query)
 #         preview = summarize_sql_results(sql_results)
 #         db_context = f"TQL executed: {sql_query}\nResults preview: {preview}"
 #         logger.info(f"SQL executed successfully. Context length: {len(db_context)} chars")
@@ -781,7 +816,7 @@ Return ONLY valid JSON: {{"tql": "your_sql_here"}}
         try:
             sql_query = fix_sql(sql_query)
             logger.info(f"Executing TQL (attempt {attempt}): {sql_query}")
-            sql_results = await run_ows_tql_query(sql_query)
+            sql_results = await query_database(sql_query)
             preview = summarize_sql_results(sql_results)
             db_context = f"TQL executed: {sql_query}\nResults preview: {preview}"
             logger.info(f"SQL executed successfully. Context length: {len(db_context)} chars")
@@ -823,7 +858,10 @@ Fix the SQL step-by-step and return new JSON: {{"tql": "fixed_sql_here"}}
         context_text=db_context,
         user_prompt=user_query
     )
-    return await call_deepseek_api_async(final_prompt)
+    logger.info(f"Final prompt to LLM:\n{final_prompt}")
+    response = await call_deepseek_api_async(final_prompt)
+    _interaction_memory.append({"user_query": user_query, "response": response})
+    return response
 
 
 
