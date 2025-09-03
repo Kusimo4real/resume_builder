@@ -89,6 +89,7 @@ class PDFRequest(BaseModel):
     resumes: List[ResumeInput] = []
     job_posting: Optional[JobPosting] = None
     message_prompt: Optional[str] = None
+    user_id: Optional[str] = None
 
     @field_validator('api_key')
     def non_empty_api_key(cls, v):
