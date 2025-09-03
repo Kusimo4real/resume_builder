@@ -89,6 +89,11 @@ async def get_session_memory(user_id: str) -> deque:
     memory_json = await redis_client.get(f"session:{user_id}")
     if memory_json:
         return deque(json.loads(memory_json), maxlen=5)
+    return deque(maxlen=5)
+    
+async def save_session_memory(user_id: str, memory: deque):
+    """"Save the session memory to Redis with 24 hours expiration."""
+    await redis_client.set(f"session:{user_id}", json.dumps(list(memory)), ex=24*3600)
 
 """
     _summary_
@@ -440,8 +445,8 @@ async def assess_prompt_scope(prompt: str) -> str:
     if re.search(salary_keywords, prompt, re.IGNORECASE):
         return "restricted"
     
-    scope_prompt = f"""
-You are an HR assistant specializing in recruitment and resume evaluation.
+    system_prompt = "You are an HR assistant for Huawei Technologies Nigeria."
+    user_prompt = f"""
 Determine if the following prompt is:
 - 'relevant': Related to HR (e.g., resume analysis, job matching, interview prep).
 - 'general': General conversation (e.g., greetings, casual chat).
@@ -449,10 +454,10 @@ Determine if the following prompt is:
 Prompt: "{prompt}"
 Respond with only 'relevant', 'general', or 'out-of-scope'.
     """
-    messages = [{"role": "user", "content": scope_prompt}]
-    response_obj = await call_groq_api_async(messages=messages)
-    response_message = response_obj.content.strip().lower()
-    return response_message
+    messages = [{"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}]
+    response_message = await call_groq_api_async(messages=messages, model="openai/gpt-oss-20b")
+    return response_message.content.strip().lower()
 
 async def process_single_resume_async(resume: Resume, job_posting: JobPosting, file_base64: str) -> MatchResponse:
     """Process a single resume asynchronously against a job posting."""
@@ -570,21 +575,19 @@ async def process_single_resume_async(resume: Resume, job_posting: JobPosting, f
 async def get_llm_response_for_resume(resume: Resume, job_posting: JobPosting, match_response: Dict) -> str:
     """Generate LLM response for a single resume."""
     start_time = time.time()
-    prompt = f"""
-    You are a professional hiring manager for Huawei Technologies, Lagos reviewing a candidate for a {match_response['job_role']} position requiring {', '.join(job_posting.skills)}, {job_posting.experience} years of experience, and a {job_posting.education} degree.
-    Candidate: {match_response['candidate_name']}
-    Skills: {', '.join(resume['skills'][:5])}
-    Experience: {resume['experience']} years
-    Education: {resume['education'][0] if resume['education'] else 'Unknown'}
-    Evaluation:
-    - Skill Match Score: {match_response['skill_match_score']:.4f}
-    - Experience Match Score: {match_response['experience_match_score']:.4f}
-    - Overall Match Score: {match_response['match_score']:.2f}
-    - Match Label: {match_response['match_label']}
-    Write a concise, professional response (100-250 words) evaluating the candidate’s fit, highlighting strengths, noting gaps, and suggesting next steps. Use a positive tone.
-    """
-    messages = [{"role": "user", "content": prompt}]
-    response_obj = await call_groq_api_async(messages)
+    system_prompt = "You are a professional hiring manager for RNOC Department at Huawei Technologies, Lagos."
+    user_prompt = f"""
+Provide detailed feedback for candidate {resume['name']} for the job role {job_posting.job_role}.
+Highlight strengths, weaknesses, and suggestions based on skills match {match_response['skill_match_score']}, experience match {match_response['experience_match_score']}, overall score {match_response['match_score']}, and label {match_response['match_label']}.
+Required skills: {', '.join(job_posting.skills)}
+Candidate skills: {', '.join(resume['skills'])}
+Required experience: {job_posting.experience} years
+Candidate experience: {resume['experience']} years
+Education: {resume['education']}
+Keep it concise (100-250 words)."""
+    messages = [{"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}]
+    response_obj = await call_groq_api_async(messages=messages, model="openai/gpt-oss-20b")
     response_message = response_obj.content.strip()
     logger.info(f"Generated LLM response for {resume['name']} in {time.time() - start_time:.2f} seconds")
     return response_message
@@ -599,13 +602,13 @@ async def query_database(tql: str) -> Dict:
     
 
 
-def build_hr_response_prompt(context_text: str, user_prompt: str) -> str:
+def build_hr_response_prompt(context_text: str, user_prompt: str, session_memory: deque) -> str:
     """Your conditioning prompt applied consistently."""
     # Format recent interactions for context
     memory_context = ""
-    if _interaction_memory:
+    if session_memory:
         memory_context = "Recent Interactions:\n"
-        for i, interaction in enumerate(_interaction_memory, 1):
+        for i, interaction in enumerate(session_memory, 1):
             memory_context += f"{i}. User: {interaction['user_query']}\n   Response: {interaction['response'][:200]}...\n"
         memory_context += "\nUse this context to provide a more informed response, if relevant.\n"
     logger.info(f"Memory context:\n{memory_context}")
@@ -887,22 +890,25 @@ def is_safe_select(sql: str) -> bool:
 #     return response
 
 
-async def handle_freeform_prompt(user_query: str, call_deepseek_api_async) -> str:
+async def handle_freeform_prompt(user_query: str, user_id: str) -> str:
     """
     Handle freeform prompt with tool calling, memory, and SQL/candidate recommendation support.
     """
+    session_memory = await get_session_memory(user_id=user_id)
     # A. Check for restricted (salary-related) queries
     classify_resp = (await assess_prompt_scope(user_query)).strip().lower()
     if classify_resp == "restricted":
         logger.info("Prompt classified as restricted due to salary-related content.")
         final_prompt = build_hr_response_prompt(
             context_text="Queries about employee salaries are restricted due to company policy.",
-            user_prompt=user_query
+            user_prompt=user_query,
+            session_memory=session_memory
         )
         fallback_messages = [{"role": "user", "content": final_prompt}]
-        response_obj = await call_groq_api_async(fallback_messages)
+        response_obj = await call_groq_api_async(fallback_messages, model="openai/gpt-oss-20b")
         response = response_obj.content.strip()
-        _interaction_memory.append({"user_query": user_query, "response": response})
+        session_memory.append({"user_query": user_query, "response": response})
+        await save_session_memory(user_id=user_id, memory=session_memory)
         return response
 
     # B. Load summarized schema for SQL generation
@@ -957,9 +963,9 @@ You have two tools:
     messages = [{"role": "system", "content": system_prompt}]
 
     # Add memory
-    for interaction in _interaction_memory:
+    for interaction in session_memory:
         messages.append({"role": "user", "content": interaction["user_query"]})
-        messages.append({"role": "assistant", "content": interaction["response"]})
+        messages.append({"role": "system", "content": interaction["response"]})
 
     # Add current query
     messages.append({"role": "user", "content": user_query})
@@ -970,7 +976,8 @@ You have two tools:
         response_obj = await call_groq_api_async(messages=messages, tools=LLM_TOOLS)
         if not response_obj.tool_calls:
             final_response = response_obj.content
-            _interaction_memory.append({"user_query": user_query, "response": final_response})
+            session_memory.append({"user_query": user_query, "response": final_response})
+            await save_session_memory(user_id, session_memory)
             return final_response
 
         for tool_call in response_obj.tool_calls:
@@ -997,22 +1004,28 @@ You have two tools:
     # Fallback if max iterations reached
     fallback_prompt = build_hr_response_prompt(
         context_text="Could not process the request after multiple attempts. Please rephrase your query with specific details (e.g., employee name, department, job role) or check the HRMS portal.",
-        user_prompt=user_query
+        user_prompt=user_query,
+        session_memory=session_memory
     )
-    response = await call_deepseek_api_async([{"role": "user", "content": fallback_prompt}])
-    _interaction_memory.append({"user_query": user_query, "response": response})
+    # Handle fallback with a more specific user and system prompt
+    # fallback_messages = [{}]
+    fallback_response_message = await call_groq_api_async([{"role": "user", "content": fallback_prompt}])
+    response = fallback_response_message.content.strip()
+    session_memory.append({"user_query": user_query, "response": response})
+    await save_session_memory(user_id, session_memory)
     return response
 
 
-async def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]], default_job_posting: Optional[JobPosting] = None, message_prompt: Optional[str] = None) -> Dict:
+async def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]], default_job_posting: Optional[JobPosting] = None, message_prompt: Optional[str] = None, user_id: str = "default") -> Dict:
     """Generate AI feedback for single/multiple resumes or conversational prompts."""
+    session_memory = await get_session_memory(user_id=user_id)
     try:
         start_time = time.time()
         # Case 1: Custom prompt provided
         if message_prompt:
             # scope = await assess_prompt_scope(message_prompt)
             if not resumes or not resumes[0][0]:   # no resumes provided
-                overall_llm_response = await handle_freeform_prompt(user_query=message_prompt, call_deepseek_api_async=call_groq_api_async)
+                overall_llm_response = await handle_freeform_prompt(user_query=message_prompt, user_id=user_id)
                 return {"results": [], "llm_response": overall_llm_response, "errors": []}
             
             # Build context if resumes are provided
@@ -1024,11 +1037,10 @@ async def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]
                         context.append(f"Candidate: {resume['name']}, Role: {job_posting.job_role}, Skills: {', '.join(resume['skills'][:5])}, Experience: {resume['experience']} years")
                     else:
                         context.append(f"Candidate: {resume['name']}, Skills: {', '.join(resume['skills'][:5])}, Experience: {resume['experience']} years. No job posting provided.")
-                        
-            prompt = f"""
-You are a highly skilled HR assistant specializing in recruitment, employee management, and resume evaluation for Huawei Technologies Nigeria.
-
-**Your Task:**
+            
+            system_prompt = "You are a highly skilled HR assistant specializing in recruitment, employee management, and resume evaluation for RNOC Department, Huawei Technologies Nigeria." 
+            user_prompt = f"""
+**Task:**
 1.  Analyze the 'User Prompt' in conjunction with the provided 'Resume/Job Context'.
 2.  Determine the primary intent of the user's prompt:
     * **HR-Relevant:** If the prompt is directly about resumes, job postings, candidate evaluation, interview advice, or any HR related task, considering the context.
@@ -1054,9 +1066,10 @@ You are a highly skilled HR assistant specializing in recruitment, employee mana
 
 **Your Response:**
 """
-
+            messages = [{"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}]
             # overall_llm_response = await call_deepseek_api_async(prompt)
-            overall_llm_response_task = asyncio.create_task(call_groq_api_async(prompt))
+            overall_llm_response_task = asyncio.create_task(call_groq_api_async(messages=messages))
             results = []
             if resumes and resumes[0][0]:
             # Process resumes concurrently
@@ -1081,7 +1094,10 @@ You are a highly skilled HR assistant specializing in recruitment, employee mana
                         results[i]['llm_response'] = llm_response
             overall_llm_response = ""
             try:
-                overall_llm_response = await overall_llm_response_task
+                overall_llm_response_message = await overall_llm_response_task
+                overall_llm_response = overall_llm_response_message.content.strip()
+                session_memory.append({"user_query": message_prompt, "response": overall_llm_response})
+                await save_session_memory(user_id=user_id, memory=session_memory)
             except Exception as e:
                 logger.error(f"Failed to get overall LLM response: {str(e)}")
                 overall_llm_response = "Something went wrong while responding. Please try again later."
