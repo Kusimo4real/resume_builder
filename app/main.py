@@ -158,7 +158,8 @@ async def predict_cv(request: PDFRequest):
         response = await get_AI_feedback(
             resumes=parsed_resumes,
             default_job_posting=request.job_posting,
-            message_prompt=request.message_prompt
+            message_prompt=request.message_prompt,
+            user_id=request.user_id or "default"
         )
         if response is None:
             raise InternalServerError("Error processing request: get_AI_feedback returned None")

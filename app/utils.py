@@ -17,6 +17,20 @@ import asyncio
 from groq import Groq, AsyncGroq
 import os
 from collections import deque
+from urllib.parse import quote
+import ows_functions.ows_api as ows_api
+import redis.asyncio as redis
+
+
+# initialize redis client
+redis_client = redis.Redis(
+    host=settings.redis_host,
+    port=settings.redis_port,
+    db=settings.redis_db,
+    password=settings.redis_password,
+    decode_responses=True
+)
+
 
 GROQ_API_KEY = settings.groq_api_key
 
@@ -27,6 +41,59 @@ OWS_BASE_URL = settings.ows_api_base_url
 
 # SCHEMA_PATH = os.path.join(os.path.dirname(__file__), '../ows_schema/hrms_schema_summary.txt')
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), '../ows_schema/hrms_schema.sql')
+
+
+LLM_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "query_database",
+            "description": "Query the HRMS database with a SQL statement. Follow the SQL rules: only SELECT, prepend table names with \"/HRMS_Dashboard/HRMS_Dashboard/\", enclose tables in double quotes, use aliases, etc.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tql": {
+                        "type": "string",
+                        "description": "The SQL SELECT statement to execute."
+                    }
+                },
+                "required": ["tql"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recommend_candidates",
+            "description": "Recommend candidates for a job role, CV, or position. Use this when asked to suggest or recommend candidates.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_role": {
+                        "type": "string",
+                        "description": "The job title or role to recommend candidates for."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "The maximum number of candidates to return (default 5).",
+                    }
+                },
+                "required": ["job_role"]
+            }
+        }
+    }
+]
+
+async def get_session_memory(user_id: str) -> deque:
+    """"Get or create a session specific interaction memory."""
+    memory_json = await redis_client.get(f"session:{user_id}")
+    if memory_json:
+        return deque(json.loads(memory_json), maxlen=5)
+    return deque(maxlen=5)
+    
+async def save_session_memory(user_id: str, memory: deque):
+    """"Save the session memory to Redis with 24 hours expiration."""
+    await redis_client.set(f"session:{user_id}", json.dumps(list(memory)), ex=24*3600)
 
 """
     _summary_
@@ -68,7 +135,7 @@ def extract_json(text: str) -> dict:
 
 def fix_sql(sql: str) -> str:
     # Fix common LLM mistakes
-    sql = sql.replace("FROM=", "FROM ")
+    sql = sql.replace("FROM=", "FROM ") 
     sql = sql.replace("JOIN=", "JOIN ")
     sql = sql.replace(";", "")  # Remove semicolons
     return sql.strip()
@@ -252,11 +319,43 @@ def extract_number_of_jobs(text: Optional[str]) -> int:
             code="NUMBER_OF_JOBS_ERROR"
         )
 
+async def execute_tool(tool_call):
+    name = tool_call.function.name
+    args = json.loads(tool_call.function.arguments)
+    if name == "query_database":
+        tql = args["tql"]
+        if not is_safe_select(tql):
+            return {"error": "Unsafe SQL query. Only SELECT statements are allowed."}
+        tql = fix_sql(tql)
+        try:
+            results = await query_database(tql)
+            return {"results": results, "tql": tql}
+        except Exception as e:
+            return {"error": f"SQL execution failed: {str(e)}"}
+    elif name == "recommend_candidates":
+        job_role = args["job_role"]
+        url = f"{OWS_BASE_URL}/adc-intg/api/rest/v1/HR_RESUME_APP/HR_AI_API/hr_ai_api_recommend_candidate/recommend_candidate/recommend_candidate"  # Replace with actual endpoint
+        params = {"job_role": job_role}
+        auth = httpx.BasicAuth(USERNAME, PASSWORD)
+        async with httpx.AsyncClient(auth=auth) as client:
+            try:
+                resp = await client.get(url, params=params)
+                resp.raise_for_status()
+                candidates = resp.json()
+                logger.info(f"Fetched {len(candidates.get('results', []))} candidates for job title '{job_role}'")
+                for cand in candidates["results"]:
+                    cand["url"] = f"{OWS_BASE_URL}/adc-ui/spl-plus/HR_RESUME_APP/HR_AI_ASSISTANT/ai_recommended_view?name={quote(cand['name'])}&email={quote(cand['email'])}"
+                return {"candidates": candidates}
+            except Exception as e:
+                return {"error": f"Could not fetch candidates for {job_role}: {str(e)}"}
+    else:
+        return {"error": "Unknown tool"}
 
 async def call_groq_api_async(
-    prompt: str,
-    # model: str = "deepseek-r1-distill-llama-70b",
+    # prompt: str,
+    messages: List[Dict[str, str]],
     model: str = "openai/gpt-oss-120b",
+    tools: Optional[List[Dict]] = None,
     max_retries: int = 2,
     timeout: float = 5.0,
 ) -> str:
@@ -274,13 +373,17 @@ async def call_groq_api_async(
         try:
             start_time = time.time()
             response = await client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
+                # messages=[{"role": "user", "content": prompt}],
+                messages=messages,
+                tools=tools or None,
+                tool_choice="auto" if tools else 'none',
                 model=model,
                 timeout=timeout  # If SDK supports it
             )
             elapsed = time.time() - start_time
             logger.info(f"Groq API call took {elapsed:.2f} seconds (attempt {attempt})")
-            return response.choices[0].message.content.strip()
+            # return response.choices[0].message.content.strip()
+            return response.choices[0].message
 
         except (httpx.RequestError, httpx.HTTPStatusError, Exception) as e:
             logger.warning(
@@ -335,11 +438,6 @@ async def call_deepseek_api_async(prompt: str, model: str = "deepseek/deepseek-r
     return ""
 
 
-def call_deepseek_api(prompt: str, model: str = "deepseek/deepseek-r1:free", max_retries: int = 2) -> str:
-    """Synchronous wrapper for DeepSeek API call."""
-    return asyncio.run(call_groq_api_async(prompt, model, max_retries))
-
-
 async def assess_prompt_scope(prompt: str) -> str:
     """Assess if a prompt is HR-relevant, general conversation, out-of-scope, or restricted (salary-related)."""
     # Check for salary-related keywords
@@ -347,8 +445,8 @@ async def assess_prompt_scope(prompt: str) -> str:
     if re.search(salary_keywords, prompt, re.IGNORECASE):
         return "restricted"
     
-    scope_prompt = f"""
-You are an HR assistant specializing in recruitment and resume evaluation.
+    system_prompt = "You are an HR assistant for Huawei Technologies Nigeria."
+    user_prompt = f"""
 Determine if the following prompt is:
 - 'relevant': Related to HR (e.g., resume analysis, job matching, interview prep).
 - 'general': General conversation (e.g., greetings, casual chat).
@@ -356,8 +454,10 @@ Determine if the following prompt is:
 Prompt: "{prompt}"
 Respond with only 'relevant', 'general', or 'out-of-scope'.
     """
-    response = await call_groq_api_async(scope_prompt)
-    return response
+    messages = [{"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}]
+    response_message = await call_groq_api_async(messages=messages, model="openai/gpt-oss-20b")
+    return response_message.content.strip().lower()
 
 async def process_single_resume_async(resume: Resume, job_posting: JobPosting, file_base64: str) -> MatchResponse:
     """Process a single resume asynchronously against a job posting."""
@@ -475,24 +575,24 @@ async def process_single_resume_async(resume: Resume, job_posting: JobPosting, f
 async def get_llm_response_for_resume(resume: Resume, job_posting: JobPosting, match_response: Dict) -> str:
     """Generate LLM response for a single resume."""
     start_time = time.time()
-    prompt = f"""
-    You are a professional hiring manager for Huawei Technologies, Lagos reviewing a candidate for a {match_response['job_role']} position requiring {', '.join(job_posting.skills)}, {job_posting.experience} years of experience, and a {job_posting.education} degree.
-    Candidate: {match_response['candidate_name']}
-    Skills: {', '.join(resume['skills'][:5])}
-    Experience: {resume['experience']} years
-    Education: {resume['education'][0] if resume['education'] else 'Unknown'}
-    Evaluation:
-    - Skill Match Score: {match_response['skill_match_score']:.4f}
-    - Experience Match Score: {match_response['experience_match_score']:.4f}
-    - Overall Match Score: {match_response['match_score']:.2f}
-    - Match Label: {match_response['match_label']}
-    Write a concise, professional response (100-250 words) evaluating the candidate’s fit, highlighting strengths, noting gaps, and suggesting next steps. Use a positive tone.
-    """
-    response = await call_groq_api_async(prompt)
+    system_prompt = "You are a professional hiring manager for RNOC Department at Huawei Technologies, Lagos."
+    user_prompt = f"""
+Provide detailed feedback for candidate {resume['name']} for the job role {job_posting.job_role}.
+Highlight strengths, weaknesses, and suggestions based on skills match {match_response['skill_match_score']}, experience match {match_response['experience_match_score']}, overall score {match_response['match_score']}, and label {match_response['match_label']}.
+Required skills: {', '.join(job_posting.skills)}
+Candidate skills: {', '.join(resume['skills'])}
+Required experience: {job_posting.experience} years
+Candidate experience: {resume['experience']} years
+Education: {resume['education']}
+Keep it concise (100-250 words)."""
+    messages = [{"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}]
+    response_obj = await call_groq_api_async(messages=messages, model="openai/gpt-oss-20b")
+    response_message = response_obj.content.strip()
     logger.info(f"Generated LLM response for {resume['name']} in {time.time() - start_time:.2f} seconds")
-    return response
+    return response_message
 
-async def run_ows_tql_query(tql: str) -> Dict:
+async def query_database(tql: str) -> Dict:
     url = f"{OWS_BASE_URL}/adc-intg/api/rest/v1/HR_RESUME_APP/HR_AI_API/hr_ai_api_hrms_data_query/hrms_data_query"
     auth = httpx.BasicAuth(USERNAME, PASSWORD)
     async with httpx.AsyncClient(auth=auth) as client:
@@ -500,64 +600,20 @@ async def run_ows_tql_query(tql: str) -> Dict:
         resp.raise_for_status()
         return resp.json()
     
-    
-# async def handle_freeform_prompt(user_query: str) -> str:
-#     # Step A: classify if DB lookup is needed
-#     classify_prompt = f"""
-#     You are a classifier. Question: "{user_query}"
-#     Should this require querying the HR database (tables: hrms_dashb_employees, hrms_dashb_appraisal_data, hrms_dashb_appraisals, hrms_dashb_projects, hrms_dashb_departments, hrms_dashb_sub_departments, hrms_dashb_skills, hrms_dashb_vendors, hrms_dashb_level, hrms_dashb_roles, hrms_dashb_baseline, hrms_dashb_tenant, hrms_dashb_province_info)?
-#     Answer only 'YES' or 'NO'.
-#     """
-#     classify_resp = await call_deepseek_api_async(classify_prompt)
-
-#     if "NO" in classify_resp.upper():
-#         # Just let LLM answer directly
-#         return await call_deepseek_api_async(user_query)
-
-#     # Step B: load schema
-#     with open("../ows_schema/hrms_schema.txt") as f:
-#         schema_text = f.read()
-
-#     sql_prompt = f"""
-#     You are a SQL generator.
-#     Only SELECT is allowed.
-#     Schema:
-#     {schema_text}
-
-#     User query: "{user_query}"
-#     Return JSON with {{ "sql": "..." }} only.
-#     """
-#     sql_json = await call_deepseek_api_async(sql_prompt)
-#     sql_query = json.loads(sql_json)["sql"]
-
-#     # Step C: run SQL via API
-#     try:
-#         sql_results = await run_ows_tql_query(sql_query)
-#     except Exception as e:
-#         return f"I tried to run a query but failed: {str(e)}"
-
-#     # Step D: final answer with results
-#     answer_prompt = f"""
-#     User asked: "{user_query}"
-#     SQL executed: {sql_query}
-#     Results: {sql_results}
-
-#     Provide a natural, HR-assistant style answer using the results.
-#     """
-#     return await call_deepseek_api_async(answer_prompt)
 
 
-def build_hr_response_prompt(context_text: str, user_prompt: str) -> str:
+def build_hr_response_prompt(context_text: str, user_prompt: str, session_memory: deque) -> str:
     """Your conditioning prompt applied consistently."""
     # Format recent interactions for context
     memory_context = ""
-    if _interaction_memory:
+    if session_memory:
         memory_context = "Recent Interactions:\n"
-        for i, interaction in enumerate(_interaction_memory, 1):
-            memory_context += f"{i}. User: {interaction['user_query']}\n   Response: {interaction['response'][:100]}...\n"
+        for i, interaction in enumerate(session_memory, 1):
+            memory_context += f"{i}. User: {interaction['user_query']}\n   Response: {interaction['response'][:200]}...\n"
         memory_context += "\nUse this context to provide a more informed response, if relevant.\n"
+    logger.info(f"Memory context:\n{memory_context}")
     return f"""
-You are a highly skilled HR assistant specializing in recruitment and resume evaluation for RNOC Department Huawei  Technologies Lagos Nigeria.
+You are a highly skilled HR assistant specializing in recruitment and resume evaluation for RNOC Department, Huawei Technologies Lagos Nigeria.
 
 You have access to the the HRMS database and can query it as needed to assist with recruitment, employee management, and resume evaluation tasks.
 
@@ -612,230 +668,364 @@ def is_safe_select(sql: str) -> bool:
                  " call ", " into "]
     return not any(tok in f" {s} " for tok in forbidden)
 
-async def handle_freeform_prompt(user_query: str, call_deepseek_api_async) -> str:
-    """
-    Free-form path:
-      1) classify if DB lookup needed
-      2) if needed: generate SQL -> run -> inject results
-      3) ALWAYS finish with your conditioning prompt
-    """
-    # A. Check for salary-related keywords first
-    classify_resp = (await assess_prompt_scope(user_query)).strip().lower()
-    if classify_resp == "restricted":
-        logger.info("Prompt classified as restricted due to salary-related content.")
-        final_prompt = build_hr_response_prompt(context_text="Queries about employee salaries are restricted due to company policy.", user_prompt=user_query)
-        response = await call_deepseek_api_async(final_prompt)
-        _interaction_memory.append({"user_query": user_query, "response": response})
-        return response
+# async def handle_freeform_prompt(user_query: str, call_deepseek_api_async) -> str:
+#     """
+#     Free-form path:
+#       1) classify if DB lookup needed
+#       2) if needed: generate SQL -> run -> inject results
+#       3) ALWAYS finish with your conditioning prompt
+#     """
+#     # A. Check for salary-related keywords first
+#     classify_resp = (await assess_prompt_scope(user_query)).strip().lower()
+#     if classify_resp == "restricted":
+#         logger.info("Prompt classified as restricted due to salary-related content.")
+#         final_prompt = build_hr_response_prompt(context_text="Queries about employee salaries are restricted due to company policy.", user_prompt=user_query)
+#         response = await call_deepseek_api_async(final_prompt)
+#         _interaction_memory.append({"user_query": user_query, "response": response})
+#         return response
     
-    # B. Classify whether to query DB
-    classify_prompt = f"""
-You are a classifier. Question: "{user_query}"
-Should this require querying the HR database (tables include employees, appraisals, projects, awards, departments, sub_departments, skills, vendors, roles, level, tenant)?
-Answer only YES or NO.
-""".strip()
-    classify_resp = (await call_deepseek_api_async(classify_prompt)).strip().upper()
-    logger.info(f"Classification response: {classify_resp}")
-    # C. If NO DB needed: answer directly with conditioning
-    if "NO" in classify_resp:
-        logger.info("Skipping DB lookup as per classification.")
-        final_prompt = build_hr_response_prompt(
-            context_text="No specific resume or job posting context provided.",
-            user_prompt=user_query
-        )
-        return await call_deepseek_api_async(final_prompt)
+#     # B. Classify whether to query DB
+#     classify_prompt = f"""
+# You are a classifier. Question: "{user_query}"
+# Should this require querying the HR database (tables include employees, appraisals, projects, awards, departments, sub_departments, skills, vendors, roles, level, tenant)?
+# Answer only YES or NO.
+# """.strip()
+#     classify_resp = (await call_deepseek_api_async(classify_prompt)).strip().upper()
+#     logger.info(f"Classification response: {classify_resp}")
+#     # C. If NO DB needed: answer directly with conditioning
+#     if "NO" in classify_resp:
+#         logger.info("Skipping DB lookup as per classification.")
+#         final_prompt = build_hr_response_prompt(
+#             context_text="No specific resume or job posting context provided.",
+#             user_prompt=user_query
+#         )
+#         response = await call_deepseek_api_async(final_prompt)
+#         _interaction_memory.append({"user_query": user_query, "response": response})
+#         return response
 
-    # D. Load summarized schema (for SQL generation)
-    try:
-        with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
-            schema_text = f.read()
-    except FileNotFoundError:
-        logger.warning("Schema file not found, using fallback")
-        schema_text = "hrms_dashb_employees(...), hrms_dashb_appraisals(...), hrms_dashb_awards(...)"  # tiny fallback
-
-    # E. Ask LLM for SQL (JSON only)
-    sql_prompt = f"""
-    
-You translate natural language to SQL for the given schema.
-
-Schema:
-{schema_text}
-
-Rules:
-- Generate a single-statement SELECT query only.
-- Never use INSERT, UPDATE, DELETE, DROP, ALTER, or multiple statements.
-- Put all table names in double quotes and prepend with "/HRMS_Dashboard/HRMS_Dashboard/"
-- Table names must appear as FROM "<table_name>" (with a space, never '=')
-- Do not add a semicolon at the end.
-- Use JOINs as needed, with proper ON clauses.
-- Return only valid JSON with no extra text, no explanations, and no markdown.
-
-Format: {{"tql":"..."}}
-
-User query: "{user_query}"
-""".strip()
-
-    sql_prompt = f"""
-    You are an expert SQL query generator for an HRMS database. Translate the user's natural language query into a single, valid SELECT query.
-
-Schema:
-{schema_text}
-
-Key Relationships (Foreign Keys):
-- hrms_dashb_employees.subdept_name → hrms_dashb_sub_departments.subdept_name
-- hrms_dashb_sub_departments.dept_name → hrms_dashb_departments.dept_name
-- hrms_dashb_appraisals.employee_id → hrms_dashb_employees.employee_id
-- hrms_dashb_awards.employee_id → hrms_dashb_employees.employee_id
-- hrms_dashb_skills.employee_id → hrms_dashb_employees.employee_id
-(And so on for others—extract these from your full schema.sql)
-- Departments and team names may be referred to interchangeably so recognize that and let your queries check both tables every time.
-- The word autin refers to the AUTIN team within Huawei.
-
-Rules:
-- Generate ONLY a single SELECT statement. No INSERT/UPDATE/DELETE, no multiple statements, no semicolons.
-- Always prepend table names with "/HRMS_Dashboard/HRMS_Dashboard/" and enclose in double quotes, e.g., FROM "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_employees".
-- Use JOINs with ON clauses for multi-table queries. Use table aliases (e.g., AS e for employees).
-- Handle aggregations (COUNT, SUM, AVG) if the query asks for totals, averages, etc.
-- Avoid using COUNT(*): When counting rows, specify a particular column instead of using the wildcard. For example, use COUNT(column_name) instead of COUNT(*)
-- For filters, use WHERE clauses. Use LIKE for partial matches.
-- If the query is ambiguous, make reasonable assumptions but prioritize accuracy.
-- When referencing a person's name, always apply proper casing by capitalizing the first letters of the name.
-- For name searches: Use LIKE with wildcards (e.g., fullname LIKE '%John%') for partial or ambiguous names (e.g., 'John', 'Smith'). Use exact match (e.g., fullname = 'John Doe') for full names or when the query specifies an exact employee. If unsure, prefer LIKE for single names and = for full names.
-- Think step-by-step: 1) Identify relevant tables. 2) Determine joins needed. 3) Add SELECT columns, WHERE filters, GROUP BY if aggregating. 4) Output the query.
-
-Examples:
-Query: "List all employees in the IT department."
-Reasoning: Tables: hrms_dashb_employees (has department_two), hrms_dashb_sub_departments (links to dept_name). Join on subdept_name. Filter on dept_name = 'IT'.
-SQL: SELECT e.fullname, e.employee_position FROM "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_employees" AS e JOIN "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_sub_departments" AS sd ON e.subdept_name = sd.subdept_name WHERE sd.dept_name = 'IT'
-
-Query: "What is the average KPI score for employees with more than 5 years experience, grouped by department?"
-Reasoning: Tables: hrms_dashb_employees (hire_date for experience), hrms_dashb_appraisal_data (kpi_score, department). Join on fullname or account_id (assuming match). Calculate experience as (CURRENT_DATE - hire_date) > 5 years. Aggregate AVG(kpi_score) GROUP BY department.
-SQL: SELECT ad.department, AVG(ad.kpi_score) AS avg_kpi FROM "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_appraisal_data" AS ad JOIN "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_employees" AS e ON ad.fullname = e.fullname WHERE (CURRENT_DATE - e.hire_date) > INTERVAL '5 years' GROUP BY ad.department
-
-Query: "Count awards per employee in Lagos location."
-Reasoning: Tables: hrms_dashb_awards (awards), hrms_dashb_employees (location, fullname). Join on employee_id. Filter location = 'Lagos'. Aggregate COUNT GROUP BY employee.
-SQL: SELECT e.fullname, COUNT(a.award_id) AS award_count FROM "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_employees" AS e JOIN "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_awards" AS a ON e.employee_id = a.employee_id WHERE e.location = 'Lagos' GROUP BY e.fullname
-
-User query: "{user_query}"
-
-Return ONLY valid JSON: {{"tql": "your_sql_here"}}
-    
-    """
-
-    sql_json_raw = await call_deepseek_api_async(sql_prompt)
-    
-    logger.info(f"Generated SQL JSON: {sql_json_raw}")
-
-    # E. Parse & validate SQL
-    try:
-        sql_obj = extract_json(sql_json_raw)
-        logger.info(f"Extracted SQL JSON object: {sql_obj}")
-        sql_query = json.loads(sql_json_raw)["tql"]
-    except Exception as e:
-        logger.exception(f"Error parsing SQL JSON from LLM: {e}")
-        # If the LLM didn't return valid JSON, fall back to conditioned answer without DB
-        fallback_prompt = build_hr_response_prompt(
-            context_text="No specific resume or job posting context provided.",
-            user_prompt=user_query
-        )
-        return await call_deepseek_api_async(fallback_prompt)
-
-    if not is_safe_select(sql_query):
-        # refuse unsafe SQL; still answer, but without DB context
-        fallback_prompt = build_hr_response_prompt(
-            context_text="DB query was rejected for safety. Proceed without DB context.",
-            user_prompt=user_query
-        )
-        return await call_deepseek_api_async(fallback_prompt)
-
-    # F. Run SQL and summarize result
+#     # D. Load summarized schema (for SQL generation)
 #     try:
-#         sql_query = fix_sql(sql_query)
-#         logger.info(f"Executing TQL: {sql_query}")
-#         sql_results = await run_ows_tql_query(sql_query)
-#         preview = summarize_sql_results(sql_results)
-#         db_context = f"TQL executed: {sql_query}\nResults preview: {preview}"
-#         logger.info(f"SQL executed successfully. Context length: {len(db_context)} chars")
+#         with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
+#             schema_text = f.read()
+#     except FileNotFoundError:
+#         logger.warning("Schema file not found, using fallback")
+#         schema_text = "hrms_dashb_employees(...), hrms_dashb_appraisals(...), hrms_dashb_awards(...)"  # tiny fallback
+
+#     # E. Ask LLM for SQL (JSON only)
+#     sql_prompt = f"""
+    
+# You translate natural language to SQL for the given schema.
+
+# Schema:
+# {schema_text}
+
+# Rules:
+# - Generate a single-statement SELECT query only.
+# - Never use INSERT, UPDATE, DELETE, DROP, ALTER, or multiple statements.
+# - Put all table names in double quotes and prepend with "/HRMS_Dashboard/HRMS_Dashboard/"
+# - Table names must appear as FROM "<table_name>" (with a space, never '=')
+# - Do not add a semicolon at the end.
+# - Use JOINs as needed, with proper ON clauses.
+# - Return only valid JSON with no extra text, no explanations, and no markdown.
+
+# Format: {{"tql":"..."}}
+
+# User query: "{user_query}"
+# """.strip()
+
+#     sql_prompt = f"""
+#     You are an expert SQL query generator for an HRMS database. Translate the user's natural language query into a single, valid SELECT query.
+
+# Schema:
+# {schema_text}
+
+# Key Relationships (Foreign Keys):
+# - hrms_dashb_employees.subdept_name → hrms_dashb_sub_departments.subdept_name
+# - hrms_dashb_sub_departments.dept_name → hrms_dashb_departments.dept_name
+# - hrms_dashb_appraisals.employee_id → hrms_dashb_employees.employee_id
+# - hrms_dashb_awards.employee_id → hrms_dashb_employees.employee_id
+# - hrms_dashb_skills.employee_id → hrms_dashb_employees.employee_id
+# (And so on for others—extract these from your full schema.sql)
+# - Departments and team names may be referred to interchangeably so recognize that and let your queries check both tables every time.
+# - The word autin refers to the AUTIN team within Huawei.
+
+# Rules:
+# - Generate ONLY a single SELECT statement. No INSERT/UPDATE/DELETE, no multiple statements, no semicolons.
+# - Always prepend table names with "/HRMS_Dashboard/HRMS_Dashboard/" and enclose in double quotes, e.g., FROM "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_employees".
+# - Use JOINs with ON clauses for multi-table queries. Use table aliases (e.g., AS e for employees).
+# - Handle aggregations (COUNT, SUM, AVG) if the query asks for totals, averages, etc.
+# - Avoid using COUNT(*): When counting rows, specify a particular column instead of using the wildcard. For example, use COUNT(column_name) instead of COUNT(*)
+# - For filters, use WHERE clauses. Use LIKE for partial matches.
+# - If the query is ambiguous, make reasonable assumptions but prioritize accuracy.
+# - When referencing a person's name, always apply proper casing by capitalizing the first letters of the name.
+# - For name searches: Use LIKE with wildcards (e.g., fullname LIKE '%John%') for partial or ambiguous names (e.g., 'John', 'Smith'). Use exact match (e.g., fullname = 'John Doe') for full names or when the query specifies an exact employee. If unsure, prefer LIKE for single names and = for full names.
+# - Think step-by-step: 1) Identify relevant tables. 2) Determine joins needed. 3) Add SELECT columns, WHERE filters, GROUP BY if aggregating. 4) Output the query.
+
+# Examples:
+# Query: "List all employees in the IT department."
+# Reasoning: Tables: hrms_dashb_employees (has department_two), hrms_dashb_sub_departments (links to dept_name). Join on subdept_name. Filter on dept_name = 'IT'.
+# SQL: SELECT e.fullname, e.employee_position FROM "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_employees" AS e JOIN "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_sub_departments" AS sd ON e.subdept_name = sd.subdept_name WHERE sd.dept_name = 'IT'
+
+# Query: "What is the average KPI score for employees with more than 5 years experience, grouped by department?"
+# Reasoning: Tables: hrms_dashb_employees (hire_date for experience), hrms_dashb_appraisal_data (kpi_score, department). Join on fullname or account_id (assuming match). Calculate experience as (CURRENT_DATE - hire_date) > 5 years. Aggregate AVG(kpi_score) GROUP BY department.
+# SQL: SELECT ad.department, AVG(ad.kpi_score) AS avg_kpi FROM "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_appraisal_data" AS ad JOIN "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_employees" AS e ON ad.fullname = e.fullname WHERE (CURRENT_DATE - e.hire_date) > INTERVAL '5 years' GROUP BY ad.department
+
+# Query: "Count awards per employee in Lagos location."
+# Reasoning: Tables: hrms_dashb_awards (awards), hrms_dashb_employees (location, fullname). Join on employee_id. Filter location = 'Lagos'. Aggregate COUNT GROUP BY employee.
+# SQL: SELECT e.fullname, COUNT(a.award_id) AS award_count FROM "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_employees" AS e JOIN "/HRMS_Dashboard/HRMS_Dashboard/hrms_dashb_awards" AS a ON e.employee_id = a.employee_id WHERE e.location = 'Lagos' GROUP BY e.fullname
+
+# User query: "{user_query}"
+
+# Return ONLY valid JSON: {{"tql": "your_sql_here"}}
+    
+#     """
+
+#     sql_json_raw = await call_deepseek_api_async(sql_prompt)
+    
+#     logger.info(f"Generated SQL JSON: {sql_json_raw}")
+
+#     # E. Parse & validate SQL
+#     try:
+#         sql_obj = extract_json(sql_json_raw)
+#         logger.info(f"Extracted SQL JSON object: {sql_obj}")
+#         sql_query = json.loads(sql_json_raw)["tql"]
 #     except Exception as e:
-#         # db_context = f"Attempted DB lookup but failed: {str(e)}"
-#         db_context = """
-# Database lookup failed. The HRMS system is currently unavailable.
+#         logger.exception(f"Error parsing SQL JSON from LLM: {e}")
+#         # If the LLM didn't return valid JSON, fall back to conditioned answer without DB
+#         fallback_prompt = build_hr_response_prompt(
+#             context_text="No specific resume or job posting context provided.",
+#             user_prompt=user_query
+#         )
+#         return await call_deepseek_api_async(fallback_prompt)
+
+#     if not is_safe_select(sql_query):
+#         # refuse unsafe SQL; still answer, but without DB context
+#         fallback_prompt = build_hr_response_prompt(
+#             context_text="DB query was rejected for safety. Proceed without DB context.",
+#             user_prompt=user_query
+#         )
+#         response = await call_deepseek_api_async(fallback_prompt)
+#         _interaction_memory.append({"user_query": user_query, "response": response})
+#         return response
+    
+
+#     # F. Run SQL and summarize result
+# #     try:
+# #         sql_query = fix_sql(sql_query)
+# #         logger.info(f"Executing TQL: {sql_query}")
+# #         sql_results = await query_database(sql_query)
+# #         preview = summarize_sql_results(sql_results)
+# #         db_context = f"TQL executed: {sql_query}\nResults preview: {preview}"
+# #         logger.info(f"SQL executed successfully. Context length: {len(db_context)} chars")
+# #     except Exception as e:
+# #         # db_context = f"Attempted DB lookup but failed: {str(e)}"
+# #         db_context = """
+# # Database lookup failed. The HRMS system is currently unavailable.
+
+# # Rules for responding:
+# # - Do not show technical details (error codes, API URLs, stack traces).
+# # - Explain the issue in simple, non-technical terms.
+# # - Suggest practical next steps for the user (e.g., try again later, check HRMS portal, contact AUTIN team for support if it persists).
+# #         """
+# #         logger.error(db_context)
+
+# #     # G. Final answer with your conditioning prompt
+# #     final_prompt = build_hr_response_prompt(
+# #         context_text=db_context,
+# #         user_prompt=user_query
+# #     )
+# #     return await call_deepseek_api_async(final_prompt)
+
+#     max_retries = 3
+#     db_context = ""
+#     for attempt in range(1, max_retries + 1):
+#         try:
+#             sql_query = fix_sql(sql_query)
+#             logger.info(f"Executing TQL (attempt {attempt}): {sql_query}")
+#             sql_results = await query_database(sql_query)
+#             preview = summarize_sql_results(sql_results)
+#             db_context = f"TQL executed: {sql_query}\nResults preview: {preview}"
+#             logger.info(f"SQL executed successfully. Context length: {len(db_context)} chars")
+#             break  # Success, exit loop
+#         except Exception as e:
+#             error_message = str(e)
+#             logger.error(f"SQL execution failed (attempt {attempt}): {error_message}")
+#             if attempt == max_retries:
+#                 db_context = """
+# Database lookup failed after retries. The HRMS system is currently unavailable.
 
 # Rules for responding:
 # - Do not show technical details (error codes, API URLs, stack traces).
 # - Explain the issue in simple, non-technical terms.
-# - Suggest practical next steps for the user (e.g., try again later, check HRMS portal, contact AUTIN team for support if it persists).
-#         """
-#         logger.error(db_context)
+# - Suggest they try again with a more specific query. e.g. "Employee name, department, location, project, appraisal, award, skill, vendor"
+# - Also suggest practical next steps for the user (e.g., try again later, check HRMS portal, contact AUTIN Technical team for support if it persists).
+#                 """
+#                 break
+#             # Generate correction
+#             correction_prompt = f"""
+# The previous SQL failed with error: {error_message}
+# Original query: {user_query}
+# Previous SQL: {sql_query}
+# Schema: {schema_text}
+# Fix the SQL step-by-step and return new JSON: {{"tql": "fixed_sql_here"}}
+# """.strip()
+#             correction_json_raw = await call_deepseek_api_async(correction_prompt)
+#             try:
+#                 correction_obj = extract_json(correction_json_raw)
+#                 sql_query = correction_obj["tql"]
+#                 logger.info(f"Generated corrected SQL (attempt {attempt}): {sql_query}")
+#             except Exception as corr_e:
+#                 logger.exception(f"Error parsing correction SQL: {corr_e}")
+#                 db_context = "Failed to correct SQL after error."
+#                 break
 
 #     # G. Final answer with your conditioning prompt
 #     final_prompt = build_hr_response_prompt(
 #         context_text=db_context,
 #         user_prompt=user_query
 #     )
-#     return await call_deepseek_api_async(final_prompt)
+#     logger.info(f"Final prompt to LLM:\n{final_prompt}")
+#     response = await call_deepseek_api_async(final_prompt)
+#     _interaction_memory.append({"user_query": user_query, "response": response})
+#     return response
 
-    max_retries = 3
-    db_context = ""
-    for attempt in range(1, max_retries + 1):
-        try:
-            sql_query = fix_sql(sql_query)
-            logger.info(f"Executing TQL (attempt {attempt}): {sql_query}")
-            sql_results = await run_ows_tql_query(sql_query)
-            preview = summarize_sql_results(sql_results)
-            db_context = f"TQL executed: {sql_query}\nResults preview: {preview}"
-            logger.info(f"SQL executed successfully. Context length: {len(db_context)} chars")
-            break  # Success, exit loop
-        except Exception as e:
-            error_message = str(e)
-            logger.error(f"SQL execution failed (attempt {attempt}): {error_message}")
-            if attempt == max_retries:
-                db_context = """
-Database lookup failed after retries. The HRMS system is currently unavailable.
 
-Rules for responding:
-- Do not show technical details (error codes, API URLs, stack traces).
-- Explain the issue in simple, non-technical terms.
-- Suggest they try again with a more specific query. e.g. "Employee name, department, location, project, appraisal, award, skill, vendor"
-- Also suggest practical next steps for the user (e.g., try again later, check HRMS portal, contact AUTIN Technical team for support if it persists).
-                """
-                break
-            # Generate correction
-            correction_prompt = f"""
-The previous SQL failed with error: {error_message}
-Original query: {user_query}
-Previous SQL: {sql_query}
-Schema: {schema_text}
-Fix the SQL step-by-step and return new JSON: {{"tql": "fixed_sql_here"}}
-""".strip()
-            correction_json_raw = await call_deepseek_api_async(correction_prompt)
-            try:
-                correction_obj = extract_json(correction_json_raw)
-                sql_query = correction_obj["tql"]
-                logger.info(f"Generated corrected SQL (attempt {attempt}): {sql_query}")
-            except Exception as corr_e:
-                logger.exception(f"Error parsing correction SQL: {corr_e}")
-                db_context = "Failed to correct SQL after error."
-                break
+async def handle_freeform_prompt(user_query: str, user_id: str) -> str:
+    """
+    Handle freeform prompt with tool calling, memory, and SQL/candidate recommendation support.
+    """
+    session_memory = await get_session_memory(user_id=user_id)
+    # A. Check for restricted (salary-related) queries
+    classify_resp = (await assess_prompt_scope(user_query)).strip().lower()
+    if classify_resp == "restricted":
+        logger.info("Prompt classified as restricted due to salary-related content.")
+        final_prompt = build_hr_response_prompt(
+            context_text="Queries about employee salaries are restricted due to company policy.",
+            user_prompt=user_query,
+            session_memory=session_memory
+        )
+        fallback_messages = [{"role": "user", "content": final_prompt}]
+        response_obj = await call_groq_api_async(fallback_messages, model="openai/gpt-oss-20b")
+        response = response_obj.content.strip()
+        session_memory.append({"user_query": user_query, "response": response})
+        await save_session_memory(user_id=user_id, memory=session_memory)
+        return response
 
-    # G. Final answer with your conditioning prompt
-    final_prompt = build_hr_response_prompt(
-        context_text=db_context,
-        user_prompt=user_query
+    # B. Load summarized schema for SQL generation
+    try:
+        with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
+            schema_text = f.read()
+    except FileNotFoundError:
+        logger.warning("Schema file not found, using fallback")
+        schema_text = "hrms_dashb_employees(...), hrms_dashb_appraisals(...), hrms_dashb_awards(...)"
+
+    # C. Build system prompt with SQL rules and tool instructions
+    system_prompt = f"""
+You are a highly skilled HR assistant for Huawei Technologies Lagos Nigeria, specializing in recruitment and resume evaluation.
+
+You have two tools:
+1. **query_database**: Use for queries requiring HRMS database access (e.g., employee details, appraisals, awards). Generate a single SELECT query following these rules:
+   - Only SELECT statements, no INSERT/UPDATE/DELETE, no semicolons.
+   - Prepend table names with "/HRMS_Dashboard/HRMS_Dashboard/" and enclose in double quotes.
+   - Use JOINs with ON clauses and table aliases (e.g., AS e for employees).
+   - For name searches: Use LIKE (e.g., fullname LIKE '%John%') for partial/ambiguous names, = for full names (e.g., fullname = 'John Doe').
+   - Normalize IDs (e.g., 'aWX1111111' to 'WX1111111' or 'a11111111' to '11111111') using REGEXP_REPLACE(employee_id, '^[^WX0-9]*', '').
+   - Avoid COUNT(*); use COUNT(column_name) for aggregations.
+   - Schema: {schema_text}
+   - Key Relationships:
+     - hrms_dashb_employees.subdept_name → hrms_dashb_sub_departments.subdept_name
+     - hrms_dashb_sub_departments.dept_name → hrms_dashb_departments.dept_name
+     - hrms_dashb_appraisals.employee_id → hrms_dashb_employees.employee_id
+     - hrms_dashb_awards.employee_id → hrms_dashb_employees.employee_id
+     - hrms_dashb_skills.employee_id → hrms_dashb_employees.employee_id
+     - Departments and team names are interchangeable; check both tables.
+     - 'AUTIN' refers to the AUTIN team within Huawei.
+2. **recommend_candidates**: Use for queries asking to recommend candidates, CVs, or job roles (e.g., "Recommend candidates for Data Analyst"). Pass the job title to get a JSON list with candidate details and URLs.
+
+**Task**:
+1. Analyze the user prompt and recent interactions to determine intent:
+   - **Database Query**: Call query_database for HRMS data (e.g., employee lists, appraisals).
+   - **Candidate Recommendation**: Call recommend_candidates for job role suggestions.
+   - **General/Out-of-Scope**: Respond directly without tools if unrelated to HR or casual.
+2. Use tools when needed and format results:
+   - For query_database, summarize results in tables or bullets.
+   - For recommend_candidates, include clickable URLs (e.g., '[View details](url)') for each candidate.
+3. If no data or tool fails, suggest rephrasing or checking the HRMS portal/AUTIN team.
+4. Maintain a professional, positive tone.
+
+**Recent Interactions**:
+{''.join([f"{i}. User: {interaction['user_query']}\n   Response: {interaction['response'][:150]}...\n" for i, interaction in enumerate(_interaction_memory, 1)]) or 'None'}
+
+**User Prompt**:
+{user_query}
+"""
+
+    messages = [{"role": "system", "content": system_prompt}]
+
+    # Add memory
+    for interaction in session_memory:
+        messages.append({"role": "user", "content": interaction["user_query"]})
+        messages.append({"role": "system", "content": interaction["response"]})
+
+    # Add current query
+    messages.append({"role": "user", "content": user_query})
+
+    # D. Tool-calling loop
+    max_tool_iterations = 3
+    for _ in range(max_tool_iterations):
+        response_obj = await call_groq_api_async(messages=messages, tools=LLM_TOOLS)
+        if not response_obj.tool_calls:
+            final_response = response_obj.content
+            session_memory.append({"user_query": user_query, "response": final_response})
+            await save_session_memory(user_id, session_memory)
+            return final_response
+
+        for tool_call in response_obj.tool_calls:
+            tool_result = await execute_tool(tool_call)
+            if "error" in tool_result:
+                logger.error(f"Tool {tool_call.function.name} failed: {tool_result['error']}")
+                messages.append({
+                    "role": "tool",
+                    "content": json.dumps({
+                        "error": tool_result["error"],
+                        "suggestion": "Please rephrase your query with specific details (e.g., employee name, department, job role) or check the HRMS portal."
+                    }),
+                    "tool_call_id": tool_call.id,
+                    "name": tool_call.function.name
+                })
+            else:
+                messages.append({
+                    "role": "tool",
+                    "content": json.dumps(tool_result),
+                    "tool_call_id": tool_call.id,
+                    "name": tool_call.function.name
+                })
+
+    # Fallback if max iterations reached
+    fallback_prompt = build_hr_response_prompt(
+        context_text="Could not process the request after multiple attempts. Please rephrase your query with specific details (e.g., employee name, department, job role) or check the HRMS portal.",
+        user_prompt=user_query,
+        session_memory=session_memory
     )
-    return await call_deepseek_api_async(final_prompt)
+    # Handle fallback with a more specific user and system prompt
+    # fallback_messages = [{}]
+    fallback_response_message = await call_groq_api_async([{"role": "user", "content": fallback_prompt}])
+    response = fallback_response_message.content.strip()
+    session_memory.append({"user_query": user_query, "response": response})
+    await save_session_memory(user_id, session_memory)
+    return response
 
 
-
-async def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]], default_job_posting: Optional[JobPosting] = None, message_prompt: Optional[str] = None) -> Dict:
+async def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]], default_job_posting: Optional[JobPosting] = None, message_prompt: Optional[str] = None, user_id: str = "default") -> Dict:
     """Generate AI feedback for single/multiple resumes or conversational prompts."""
+    session_memory = await get_session_memory(user_id=user_id)
     try:
         start_time = time.time()
         # Case 1: Custom prompt provided
         if message_prompt:
             # scope = await assess_prompt_scope(message_prompt)
             if not resumes or not resumes[0][0]:   # no resumes provided
-                overall_llm_response = await handle_freeform_prompt(user_query=message_prompt, call_deepseek_api_async=call_groq_api_async)
+                overall_llm_response = await handle_freeform_prompt(user_query=message_prompt, user_id=user_id)
                 return {"results": [], "llm_response": overall_llm_response, "errors": []}
             
             # Build context if resumes are provided
@@ -847,11 +1037,10 @@ async def get_AI_feedback(resumes: List[Tuple[Resume, Optional[JobPosting], str]
                         context.append(f"Candidate: {resume['name']}, Role: {job_posting.job_role}, Skills: {', '.join(resume['skills'][:5])}, Experience: {resume['experience']} years")
                     else:
                         context.append(f"Candidate: {resume['name']}, Skills: {', '.join(resume['skills'][:5])}, Experience: {resume['experience']} years. No job posting provided.")
-                        
-            prompt = f"""
-You are a highly skilled HR assistant specializing in recruitment, employee management, and resume evaluation for Huawei Technologies Nigeria.
-
-**Your Task:**
+            
+            system_prompt = "You are a highly skilled HR assistant specializing in recruitment, employee management, and resume evaluation for RNOC Department, Huawei Technologies Nigeria." 
+            user_prompt = f"""
+**Task:**
 1.  Analyze the 'User Prompt' in conjunction with the provided 'Resume/Job Context'.
 2.  Determine the primary intent of the user's prompt:
     * **HR-Relevant:** If the prompt is directly about resumes, job postings, candidate evaluation, interview advice, or any HR related task, considering the context.
@@ -877,9 +1066,10 @@ You are a highly skilled HR assistant specializing in recruitment, employee mana
 
 **Your Response:**
 """
-
+            messages = [{"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}]
             # overall_llm_response = await call_deepseek_api_async(prompt)
-            overall_llm_response_task = asyncio.create_task(call_groq_api_async(prompt))
+            overall_llm_response_task = asyncio.create_task(call_groq_api_async(messages=messages))
             results = []
             if resumes and resumes[0][0]:
             # Process resumes concurrently
@@ -904,7 +1094,10 @@ You are a highly skilled HR assistant specializing in recruitment, employee mana
                         results[i]['llm_response'] = llm_response
             overall_llm_response = ""
             try:
-                overall_llm_response = await overall_llm_response_task
+                overall_llm_response_message = await overall_llm_response_task
+                overall_llm_response = overall_llm_response_message.content.strip()
+                session_memory.append({"user_query": message_prompt, "response": overall_llm_response})
+                await save_session_memory(user_id=user_id, memory=session_memory)
             except Exception as e:
                 logger.error(f"Failed to get overall LLM response: {str(e)}")
                 overall_llm_response = "Something went wrong while responding. Please try again later."
