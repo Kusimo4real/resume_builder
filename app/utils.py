@@ -18,7 +18,6 @@ from groq import Groq, AsyncGroq
 import os
 from collections import deque
 from urllib.parse import quote
-import ows_functions.ows_api as ows_api
 import redis.asyncio as redis
 
 
