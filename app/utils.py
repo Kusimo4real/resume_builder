@@ -341,9 +341,12 @@ async def execute_tool(tool_call):
                 resp = await client.get(url, params=params)
                 resp.raise_for_status()
                 candidates = resp.json()
+                # format candidates as HTML list with links opening in new tab
                 logger.info(f"Fetched {len(candidates.get('results', []))} candidates for job title '{job_role}'")
                 for cand in candidates["results"]:
-                    cand["url"] = f"{OWS_BASE_URL}/adc-ui/spl-plus/HR_RESUME_APP/HR_AI_ASSISTANT/ai_recommended_view?name={quote(cand['name'])}&email={quote(cand['email'])}"
+                    # cand["url"] = f"{OWS_BASE_URL}/adc-ui/spl-plus/HR_RESUME_APP/HR_AI_ASSISTANT/ai_recommended_view?name={quote(cand['name'])}&email={quote(cand['email'])}"
+                    cand_url = f"{OWS_BASE_URL}/adc-ui/spl-plus/HR_RESUME_APP/HR_AI_ASSISTANT/ai_recommended_view?name={quote(cand['name'])}&email={quote(cand['email'])}"
+                    cand["link"] = f'<a href="{cand_url}" target="_blank" rel="noopener noreferrer">{cand["name"]}</a>'
                 return {"candidates": candidates}
             except Exception as e:
                 return {"error": f"Could not fetch candidates for {job_role}: {str(e)}"}
